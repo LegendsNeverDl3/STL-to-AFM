@@ -142,13 +142,23 @@ app.layout = dbc.Container([
                     html.Div([
                         html.Label("Material Preset", className="black-text-label"),
                         dcc.Dropdown(
-                            id='material-preset',
-                            options=material_options,
-                            value=DEFAULT_MATERIAL,
-                            clearable=False,
-                            style={'color': 'black', 'fontWeight': '600'},
-                        ),
+                                id='material-preset',
+                                options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()],
+                                value='polystyrene_foam',
+                                clearable=False,
+                                style={'color': 'black', 'fontWeight': '600'},
+                            ),
                     ], className="control-row"),
+                    
+                    html.Div([
+                        html.Label("Phase Difference (Top vs Bottom °)", className="black-text-label"),
+                        dcc.Slider(
+                            id='phase-shift',
+                            min=0, max=360, step=1, value=0,
+                            marks={0: '0', 90: '90', 180: '180', 270: '270', 360: '360'},
+                            tooltip={"placement": "bottom", "always_visible": False}
+                        )
+                    ], className="control-row", style={'marginTop': '15px'}),
                     
                     html.Div([
                         dbc.Checklist(
@@ -278,10 +288,10 @@ def sync_controls(sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, relayout
     [Input('pos-x', 'value'), Input('pos-y', 'value'), Input('pos-z', 'value'), 
      Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value'),
      Input('force-model', 'value'), Input('material-preset', 'value'),
-     Input('field-toggles', 'value')],
+     Input('field-toggles', 'value'), Input('phase-shift', 'value')],
     [State('live-graph', 'relayoutData'), State('rotation-mode', 'value'), State('camera-store', 'data')]
 )
-def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles,
+def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles, phase_shift_deg,
                    relayout, mode, camera_data):
     # --- Update active material ---
     mat_module.ACTIVE_MATERIAL = material_key
@@ -310,24 +320,32 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     show_gravity = 'gravity_arrows' in (field_toggles or [])
     show_net_force = 'net_force_arrows' in (field_toggles or [])
 
+    # --- Compute phase array ---
+    phases = np.zeros(len(SOURCES))
+    phases[SOURCES[:, 2] > 0] = np.radians(phase_shift_deg)
+
     # --- Compute acoustic field based on selected model ---
     stats_lines = []
     mat_info = get_material(material_key)
     f1, f2 = get_contrast_factors(material_key)
     
     if force_model == 'gorkov':
+        # Gorkov evaluates body forces. To map this to surface nodes like Simplified model,
+        # we treat each face as a discrete sub-particle containing an equal fraction of the mass/volume.
+        vol_per_face = mesh.volume / max(1, len(a_pts))
         p_amp, v_speed, v_vectors, gorkov_U, gorkov_force = \
-            compute_gorkov_forces(c_pts, SOURCES, mesh.volume)
+            compute_gorkov_forces(c_pts, SOURCES, vol_per_face, phases=phases)
         f_acoustic = gorkov_force
         model_label = "Gorkov"
         stats_lines.append(html.Div([html.Span("MODEL: ", style={'color': '#888'}), "Gorkov Potential"]))
+        stats_lines.append(html.Div([html.Span("PHASE: ", style={'color': '#888'}), f"Top offset {phase_shift_deg}°"]))
         stats_lines.append(html.Div([html.Span("f1: ", style={'color': '#888'}), f"{f1:.4f}",
                                      html.Span("  f2: ", style={'color': '#888'}), f"{f2:.4f}"]))
         if gorkov_U is not None:
             stats_lines.append(html.Div([html.Span("GORKOV U: ", style={'color': '#888'}),
                                          f"min={np.min(gorkov_U):.2e} max={np.max(gorkov_U):.2e}"]))
     else:
-        p_amp, v_scalar, f_acoustic = compute_simplified_forces(c_pts, n_pts, a_pts, SOURCES)
+        p_amp, v_scalar, f_acoustic = compute_simplified_forces(c_pts, n_pts, a_pts, SOURCES, phases=phases)
         v_speed = v_scalar
         v_vectors = None
         gorkov_U = None
@@ -370,27 +388,44 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     def draw_arrows(origins, vecs, color, name, scale=6.0, ref_mag=None):
         mags = np.linalg.norm(vecs, axis=1)
         if ref_mag is None:
-            avg = np.mean(mags[mags > 0]) if np.any(mags > 0) else 1
+            # Native auto-scaling: find the average non-zero magnitude
+            avg = np.mean(mags[mags > 0]) if np.any(mags > 0) else 1.0
         else:
             avg = ref_mag
             
-        # Subsample for performance so the 3D plot doesn't lag
+        # Subsample for performance
         step = max(1, len(origins) // 300)
         idx = np.arange(0, len(origins), step)
         
         ox, oy, oz = origins[idx, 0], origins[idx, 1], origins[idx, 2]
         u, v, w = vecs[idx, 0], vecs[idx, 1], vecs[idx, 2]
-        
-        # Scale vectors visually but keep relative sizes
+        m_sub = mags[idx]
+        # Linearly scale relative to the reference magnitude
         vis_scale = scale / avg
-        u, v, w = u * vis_scale, v * vis_scale, w * vis_scale
+        vis_mags = m_sub * vis_scale
         
+        # Enforce a generous cap: no arrow can be drawn larger than 15x the scale
+        # This keeps normal vectors large, but stops gravity from exploding the screen.
+        max_multiplier = 15.0
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            cap_factors = np.ones_like(vis_mags)
+            mask = vis_mags > (scale * max_multiplier)
+            if np.any(mask):
+                cap_factors[mask] = (scale * max_multiplier) / vis_mags[mask]
+                
+            u = u * vis_scale * cap_factors
+            v = v * vis_scale * cap_factors
+            w = w * vis_scale * cap_factors
+            
+        dynamic_sizeref = scale * 1.5
+            
         fig.add_trace(go.Cone(
             x=ox, y=oy, z=oz,
             u=u, v=v, w=w,
             sizemode="absolute",
-            sizeref=scale * 1.5,   # Adjust arrow head size
-            anchor="tip",          # Makes the arrow point exactly AT the surface points
+            sizeref=dynamic_sizeref, 
+            anchor="tip",          
             colorscale=[[0, color], [1, color]], 
             showscale=False,
             name=name,
@@ -473,6 +508,6 @@ if __name__ == "__main__":
     else:
         SOURCES = np.array([[0, 0, 40], [0, 0, -40]])
 
-    print(f"\n--- RESTARTING ON PORT 8095 ---\n")
-    webbrowser.open("http://127.0.0.1:8095")
-    app.run(debug=False, port=8095, host='0.0.0.0')
+    print(f"Server is preparing to launch... Dash will automatically push physics updates.")
+    print(f"Open your browser to: http://127.0.0.1:8095")
+    app.run(debug=True, port=8095, host='0.0.0.0')
