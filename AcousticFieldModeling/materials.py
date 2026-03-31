@@ -14,9 +14,10 @@ import numpy as np
 MEDIA = {
     "air": {
         "name": "Air (20C, 1 atm)",
-        "rho": 1.225e-12,                # density in g/mm³  (1.225 kg/m³)
+        "rho": 1.225e-6,                # density in g/mm³  (1.225 kg/m³)
         "c": 343000.0,                    # speed of sound in mm/s  (343 m/s)
         "description": "Standard air at room temperature and atmospheric pressure",
+        "kappa": 6.939e-6                 # compressibility
     },
     # Future media can be added here:
     # "water": {
@@ -33,39 +34,45 @@ MEDIA = {
 MATERIALS = {
     "solid_plastic": {
         "name": "Solid Plastic (PLA/ABS)",
-        "rho": 1.25e-9,                  # density in g/mm³  (~1250 kg/m³)
-        "c": 2_400_000.0,                # speed of sound in mm/s  (~2400 m/s)
-        "description": "Typical 3D-printed PLA or ABS plastic",
+        "rho": 1.250e-3,                  # density in g/mm³  (1250 kg/m³)
+        "c": 2_400_000.0,                # speed of sound in mm/s  (2400 m/s)
+        "description": "Standard 3D printing filament, solid infill",
+        "kappa": 1.389e-10,
     },
     "polystyrene_foam": {
         "name": "Polystyrene Foam (EPS)",
-        "rho": 0.025e-9,                 # ~25 kg/m³
+        "rho": 0.025e-3,                 # ~25 kg/m³
         "c": 1_800_000.0,                # ~1800 m/s
         "description": "Expanded polystyrene foam — commonly levitated",
+        "kappa": 1.235e-8,
     },
     "water_droplet": {
         "name": "Water Droplet",
-        "rho": 1.00e-9,                  # ~1000 kg/m³
+        "rho": 1.000e-3,                  # ~1000 kg/m³
         "c": 1_480_000.0,                # ~1480 m/s
-        "description": "Liquid water droplet suspended in air",
+        "description": "Liquid water droplet",
+        "kappa": 4.566e-10,
     },
     "glass": {
         "name": "Glass (Borosilicate)",
-        "rho": 2.23e-9,                  # ~2230 kg/m³
+        "rho": 2.230e-3,                  # ~2230 kg/m³
         "c": 5_640_000.0,                # ~5640 m/s
         "description": "Borosilicate laboratory glass",
+        "kappa": 1.412e-11,
     },
     "steel": {
-        "name": "Steel (Mild)",
-        "rho": 7.85e-9,                  # ~7850 kg/m³
+        "name": "Steel Bearing",
+        "rho": 7.850e-3,                  # ~7850 kg/m³
         "c": 5_960_000.0,                # ~5960 m/s
-        "description": "Mild carbon steel",
+        "description": "Stainless steel ball bearing",
+        "kappa": 3.587e-12,
     },
     "aluminum": {
         "name": "Aluminum (6061)",
-        "rho": 2.70e-9,                  # ~2700 kg/m³
+        "rho": 2.700e-3,                  # ~2700 kg/m³
         "c": 6_420_000.0,                # ~6420 m/s
         "description": "Aluminum 6061-T6 alloy",
+        "kappa": 9.000e-12,
     },
 }
 
@@ -74,7 +81,8 @@ MATERIALS = {
 # >>> CHANGE THESE TO SWITCH MATERIAL / MEDIUM <<<
 ##########################################################################################
 ACTIVE_MEDIUM = "air"
-ACTIVE_MATERIAL = "solid_plastic"
+ACTIVE_MATERIAL = "polystyrene_foam"
+DEFAULT_SCALE = 0.04
 
 ##########################################################################################
 # Acoustic Source Parameters

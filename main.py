@@ -367,10 +367,13 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
         ))
 
     # --- Arrow drawing helper using 3D cones ---
-    def draw_arrows(origins, vecs, color, name, scale=6.0):
+    def draw_arrows(origins, vecs, color, name, scale=6.0, ref_mag=None):
         mags = np.linalg.norm(vecs, axis=1)
-        avg = np.mean(mags[mags > 0]) if np.any(mags > 0) else 1
-        
+        if ref_mag is None:
+            avg = np.mean(mags[mags > 0]) if np.any(mags > 0) else 1
+        else:
+            avg = ref_mag
+            
         # Subsample for performance so the 3D plot doesn't lag
         step = max(1, len(origins) // 300)
         idx = np.arange(0, len(origins), step)
@@ -404,17 +407,24 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
             v_arrow = v_speed[:, np.newaxis] * (-n_pts)
             draw_arrows(c_pts, v_arrow, "#00e0ff", "Velocity (scalar)", scale=4.0)
 
+    # Disable dynamic auto-scaling. A dynamic scale causes arrows to "blow up" to
+    # the maximum screen size even when they are physically near zero.
+    # By using a fixed reference magnitude, 1 unit of visual arrow length 
+    # perfectly equals a fixed physical unit of force (g mm / s^2) across the board.
+    # Reference: ~500 units of force produces a length 5.0 arrow.
+    fixed_physics_scale = 500.0
+
     # 3. Acoustic force arrows
     if show_acoustic_force:
-        draw_arrows(c_pts, f_acoustic, "#ffff00", f"Acoustic Force ({model_label})", scale=5.0)
+        draw_arrows(c_pts, f_acoustic, "#ffff00", f"Acoustic Force ({model_label})", scale=5.0, ref_mag=fixed_physics_scale)
 
     # 4. Gravity arrows
     if show_gravity:
-        draw_arrows(c_pts, f_gravity, "#ff0000", "Gravity", scale=4.0)
+        draw_arrows(c_pts, f_gravity, "#ff0000", "Gravity", scale=5.0, ref_mag=fixed_physics_scale)
 
     # 5. Net force arrows
     if show_net_force:
-        draw_arrows(c_pts, f_net, "#00ff00", "Net Force", scale=6.0)
+        draw_arrows(c_pts, f_net, "#00ff00", "Net Force", scale=5.0, ref_mag=fixed_physics_scale)
 
     # 6. Transducer positions
     fig.add_trace(go.Scatter3d(x=SOURCES[:, 0], y=SOURCES[:, 1], z=SOURCES[:, 2],
@@ -449,7 +459,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", type=str, default="3D_Files/cube_50mm.stl")
-    parser.add_argument("--scale", type=float, default=0.1)
+    parser.add_argument("--scale", type=float, default=0.04) # 50mm * 0.04 = 2mm object
     args = parser.parse_args()
 
     global STL_PATH, SOURCES, SCALE_FACTOR
