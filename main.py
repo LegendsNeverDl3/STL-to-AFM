@@ -3,30 +3,59 @@ import trimesh
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
+import sys
 import argparse
 import webbrowser
 from dash import Dash, dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 from flask_cors import CORS
 
-def acoustic_pressure_coherent(points, sources, phases=None):
-    rho = 1.225e-12 
-    c = 343000.0   
-    f = 40000.0    
-    wl = c / f
-    k = 2 * np.pi / wl
-    diff = points[:, np.newaxis, :] - sources[np.newaxis, :, :]
-    r = np.linalg.norm(diff, axis=2)
-    r = np.clip(r, 1e-3, None)
-    if phases is None:
-        phases = np.zeros(len(sources))
-    A = 4242.0 
-    angle = k * r + phases[np.newaxis, :]
-    complex_field = (A / r) * (np.cos(angle) + 1j * np.sin(angle))
-    total_field = np.sum(complex_field, axis=1)
-    pressure_amplitude = np.abs(total_field)
-    velocity_amplitude = pressure_amplitude / (rho * c)
-    return pressure_amplitude, velocity_amplitude
+# --- Import acoustic field module ---
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'AcousticFieldModeling'))
+from SimAcousticField import (
+    compute_complex_pressure,
+    compute_velocity_vector,
+    compute_gorkov_potential,
+    compute_gorkov_force,
+)
+from materials import (
+    get_medium, get_material, get_contrast_factors,
+    MATERIALS, AMPLITUDE,
+    ACTIVE_MATERIAL as DEFAULT_MATERIAL,
+)
+import materials as mat_module
+
+
+# --- Legacy simplified model (kept for "Simplified" mode) ---
+def compute_simplified_forces(centroids, normals, face_areas, sources, phases=None):
+    """Simplified radiation pressure model: F = p^2/(rho*c^2) * (-n) * A"""
+    med = get_medium()
+    rho = med["rho"]
+    c = med["c"]
+
+    p_complex = compute_complex_pressure(centroids, sources, phases)
+    p_amplitude = np.abs(p_complex)
+    v_scalar = p_amplitude / (rho * c)
+
+    p_rad = (p_amplitude ** 2) / (rho * c ** 2)
+    f_acoustic = p_rad[:, np.newaxis] * (-normals) * face_areas[:, np.newaxis]
+
+    return p_amplitude, v_scalar, f_acoustic
+
+
+# --- Gorkov model ---
+def compute_gorkov_forces(centroids, sources, mesh_volume, phases=None):
+    """Full Gorkov potential model: F = -grad(U)"""
+    f1, f2 = get_contrast_factors()
+
+    p_complex = compute_complex_pressure(centroids, sources, phases)
+    p_amplitude = np.abs(p_complex)
+    v_vectors, v_speed = compute_velocity_vector(centroids, sources, phases)
+    gorkov_U = compute_gorkov_potential(p_complex, v_speed, mesh_volume, f1, f2)
+    gorkov_force = compute_gorkov_force(centroids, sources, mesh_volume, f1, f2, phases)
+
+    return p_amplitude, v_speed, v_vectors, gorkov_U, gorkov_force
+
 
 # --- DASH APPLICATION CONFIG ---
 app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
@@ -51,6 +80,7 @@ app.index_string = '''
             .control-row { margin-bottom: 12px; padding: 0 5px; }
             body { background: radial-gradient(circle at center, #1e1e2f 0%, #0d0d12 100%) !important; }
             .radio-group label { color: #495057 !important; font-weight: 600 !important; }
+            .dropdown-dark .Select-control { background-color: white !important; }
         </style>
     </head>
     <body class="control-panel">
@@ -63,6 +93,9 @@ app.index_string = '''
     </body>
 </html>
 '''
+
+# Build material dropdown options
+material_options = [{'label': v['name'], 'value': k} for k, v in MATERIALS.items()]
 
 app.layout = dbc.Container([
     dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}}),
@@ -88,6 +121,49 @@ app.layout = dbc.Container([
                             inline=True
                         ),
                     ]),
+                    
+                    # --- Acoustic Field Controls ---
+                    html.Div("Acoustic Field", className="section-header"),
+                    
+                    html.Div([
+                        html.Label("Force Model", className="black-text-label"),
+                        dcc.Dropdown(
+                            id='force-model',
+                            options=[
+                                {'label': 'Simplified (p^2/rho*c^2)', 'value': 'simplified'},
+                                {'label': 'Gorkov Potential', 'value': 'gorkov'},
+                            ],
+                            value='simplified',
+                            clearable=False,
+                            style={'color': 'black', 'fontWeight': '600'},
+                        ),
+                    ], className="control-row"),
+                    
+                    html.Div([
+                        html.Label("Material Preset", className="black-text-label"),
+                        dcc.Dropdown(
+                            id='material-preset',
+                            options=material_options,
+                            value=DEFAULT_MATERIAL,
+                            clearable=False,
+                            style={'color': 'black', 'fontWeight': '600'},
+                        ),
+                    ], className="control-row"),
+                    
+                    html.Div([
+                        dbc.Checklist(
+                            id='field-toggles',
+                            options=[
+                                {'label': '  Color by Pressure', 'value': 'pressure_color'},
+                                {'label': '  Show Velocity Arrows', 'value': 'velocity_arrows'},
+                                {'label': '  Show Force Arrows', 'value': 'force_arrows'},
+                                {'label': '  Show Gravity', 'value': 'gravity_arrows'},
+                            ],
+                            value=['pressure_color', 'force_arrows', 'gravity_arrows'],
+                            className="radio-group",
+                            style={'fontSize': '0.85rem'},
+                        ),
+                    ], className="control-row"),
                     
                     html.Div("Translation (mm)", className="section-header"),
                     # X Position
@@ -199,13 +275,21 @@ def sync_controls(sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, relayout
 @app.callback(
     [Output('live-graph', 'figure'), Output('stats-target', 'children')],
     [Input('pos-x', 'value'), Input('pos-y', 'value'), Input('pos-z', 'value'), 
-     Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value')],
+     Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value'),
+     Input('force-model', 'value'), Input('material-preset', 'value'),
+     Input('field-toggles', 'value')],
     [State('live-graph', 'relayoutData'), State('rotation-mode', 'value'), State('camera-store', 'data')]
 )
-def update_physics(x, y, z, rx, ry, rz, relayout, mode, camera_data):
+def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles,
+                   relayout, mode, camera_data):
+    # --- Update active material ---
+    mat_module.ACTIVE_MATERIAL = material_key
+
+    # --- Load and transform mesh ---
     mesh = trimesh.load(STL_PATH)
     if isinstance(mesh, trimesh.Scene):
-        mesh = mesh.to_geometry()
+        meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
+        mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
     mesh.apply_scale(SCALE_FACTOR)
     mesh.vertices -= mesh.bounding_box.centroid
     
@@ -216,65 +300,149 @@ def update_physics(x, y, z, rx, ry, rz, relayout, mode, camera_data):
     t_mat = trimesh.transformations.translation_matrix([x, y, z])
     mesh.apply_transform(trimesh.transformations.concatenate_matrices(t_mat, r_z, r_y, r_x))
     
-    c, n, a = mesh.triangles_center, mesh.face_normals, mesh.area_faces
-    p, v = acoustic_pressure_coherent(c, SOURCES)
-    p_rad = (p**2) / (1.225e-12 * (343000.0**2))
-    f_acoustic = p_rad[:, np.newaxis] * (-n) * a[:, np.newaxis]
+    c_pts, n_pts, a_pts = mesh.triangles_center, mesh.face_normals, mesh.area_faces
+
+    # --- Parse toggles ---
+    show_pressure = 'pressure_color' in (field_toggles or [])
+    show_velocity = 'velocity_arrows' in (field_toggles or [])
+    show_force = 'force_arrows' in (field_toggles or [])
+    show_gravity = 'gravity_arrows' in (field_toggles or [])
+
+    # --- Compute acoustic field based on selected model ---
+    stats_lines = []
+    mat_info = get_material(material_key)
+    f1, f2 = get_contrast_factors(material_key)
     
-    total_mass = mesh.volume * 1000e-12
+    if force_model == 'gorkov':
+        p_amp, v_speed, v_vectors, gorkov_U, gorkov_force = \
+            compute_gorkov_forces(c_pts, SOURCES, mesh.volume)
+        f_acoustic = gorkov_force
+        model_label = "Gorkov"
+        stats_lines.append(html.Div([html.Span("MODEL: ", style={'color': '#888'}), "Gorkov Potential"]))
+        stats_lines.append(html.Div([html.Span("f1: ", style={'color': '#888'}), f"{f1:.4f}",
+                                     html.Span("  f2: ", style={'color': '#888'}), f"{f2:.4f}"]))
+        if gorkov_U is not None:
+            stats_lines.append(html.Div([html.Span("GORKOV U: ", style={'color': '#888'}),
+                                         f"min={np.min(gorkov_U):.2e} max={np.max(gorkov_U):.2e}"]))
+    else:
+        p_amp, v_scalar, f_acoustic = compute_simplified_forces(c_pts, n_pts, a_pts, SOURCES)
+        v_speed = v_scalar
+        v_vectors = None
+        gorkov_U = None
+        model_label = "Simplified"
+        stats_lines.append(html.Div([html.Span("MODEL: ", style={'color': '#888'}), "Simplified Radiation Pressure"]))
+
+    # --- Gravity ---
+    total_mass = mesh.volume * mat_info['rho']  # g (in mm/g unit system)
     f_gravity = np.zeros_like(f_acoustic)
-    f_gravity[:, 2] = -(total_mass * 9806.65) / len(a)
+    # The trandducers were mapped to the Z-axis on load, so gravity should pull down -Z
+    f_gravity[:, 2] = -(total_mass * 9806.65) / len(a_pts)  # gravity in mm/s^2
     
     f_net = f_acoustic + f_gravity
     net_v = np.sum(f_net, axis=0)
 
+    # --- Build Figure ---
     fig = go.Figure()
-    fig.add_trace(go.Mesh3d(
-        x=mesh.vertices[:,0], y=mesh.vertices[:,1], z=mesh.vertices[:,2],
-        i=mesh.faces[:,0], j=mesh.faces[:,1], k=mesh.faces[:,2],
-        color='#00e0ff', opacity=0.35, flatshading=True,
-        lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
-        name='Acoustic Target'
-    ))
-    
-    def draw_arrows(vecs, color, name, scale=6.0):
+
+    # 1. Mesh — colored by pressure or plain
+    if show_pressure:
+        fig.add_trace(go.Mesh3d(
+            x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
+            i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
+            intensity=p_amp, intensitymode='cell',
+            colorscale='Viridis', colorbar=dict(title='Pressure (Pa)', x=1.0, len=0.5, y=0.75),
+            opacity=0.7, flatshading=True,
+            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
+            name='Acoustic Target',
+        ))
+    else:
+        fig.add_trace(go.Mesh3d(
+            x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
+            i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
+            color='#00e0ff', opacity=0.35, flatshading=True,
+            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
+            name='Acoustic Target',
+        ))
+
+    # --- Arrow drawing helper using 3D cones ---
+    def draw_arrows(origins, vecs, color, name, scale=6.0):
         mags = np.linalg.norm(vecs, axis=1)
-        avg = np.mean(mags) if np.mean(mags) > 0 else 1
-        u, v, w = (vecs / avg * scale).T 
-        lx, ly, lz = [], [], []
-        for i in range(len(c)):
-            lx.extend([c[i,0], c[i,0] + u[i]*0.8, None])
-            ly.extend([c[i,1], c[i,1] + v[i]*0.8, None])
-            lz.extend([c[i,2], c[i,2] + w[i]*0.8, None])
-        fig.add_trace(go.Scatter3d(x=lx, y=ly, z=lz, mode='lines', line={'color':color, 'width':5}, showlegend=False))
+        avg = np.mean(mags[mags > 0]) if np.any(mags > 0) else 1
+        
+        # Subsample for performance so the 3D plot doesn't lag
+        step = max(1, len(origins) // 300)
+        idx = np.arange(0, len(origins), step)
+        
+        ox, oy, oz = origins[idx, 0], origins[idx, 1], origins[idx, 2]
+        u, v, w = vecs[idx, 0], vecs[idx, 1], vecs[idx, 2]
+        
+        # Scale vectors visually but keep relative sizes
+        vis_scale = scale / avg
+        u, v, w = u * vis_scale, v * vis_scale, w * vis_scale
+        
+        fig.add_trace(go.Cone(
+            x=ox, y=oy, z=oz,
+            u=u, v=v, w=w,
+            sizemode="absolute",
+            sizeref=scale * 1.5,   # Adjust arrow head size
+            anchor="tip",          # Makes the arrow point exactly AT the surface points
+            colorscale=[[0, color], [1, color]], 
+            showscale=False,
+            name=name,
+            showlegend=True
+        ))
 
-    draw_arrows(f_acoustic, "#00f0ff", "Acoustic Pressure")
-    draw_arrows(f_gravity, "#ff5555", "Gravitational")
-    draw_arrows(f_net, "#55ff55", "Net Force")
+    # 2. Velocity arrows
+    if show_velocity:
+        if v_vectors is not None:
+            v_real = np.real(v_vectors)
+            draw_arrows(c_pts, v_real, "#00e0ff", "Velocity", scale=4.0)
+        else:
+            # For simplified mode, velocity is scalar along -normal 
+            v_arrow = v_speed[:, np.newaxis] * (-n_pts)
+            draw_arrows(c_pts, v_arrow, "#00e0ff", "Velocity (scalar)", scale=4.0)
 
-    fig.add_trace(go.Scatter3d(x=SOURCES[:,0], y=SOURCES[:,1], z=SOURCES[:,2], mode='markers', 
-                               marker={'size': 4, 'color': 'white', 'opacity': 0.7}, name='Transducers'))
+    # 3. Acoustic force arrows
+    if show_force:
+        draw_arrows(c_pts, f_acoustic, "#ffff00", f"Acoustic Force ({model_label})", scale=6.0)
+
+    # 4. Gravity arrows
+    if show_gravity:
+        draw_arrows(c_pts, f_gravity, "#ff0000", "Gravity", scale=6.0)
+
+    # 5. Net force arrows (always shown if force is shown)
+    if show_force:
+        draw_arrows(c_pts, f_net, "#00ff00", "Net Force", scale=6.0)
+
+    # 6. Transducer positions
+    fig.add_trace(go.Scatter3d(x=SOURCES[:, 0], y=SOURCES[:, 1], z=SOURCES[:, 2],
+                               mode='markers',
+                               marker={'size': 4, 'color': 'white', 'opacity': 0.7},
+                               name='Transducers'))
 
     limit = 50
     fig.update_layout(
         template='plotly_dark',
-        scene={'xaxis':{'range':[-limit, limit], 'gridcolor': '#333'}, 
-               'yaxis':{'range':[-limit, limit], 'gridcolor': '#333'}, 
-               'zaxis':{'range':[-limit, limit], 'gridcolor': '#333'}, 
-               'aspectmode':'cube'},
-        margin={'l':0,'r':0,'t':0,'b':0},
+        scene={'xaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
+               'yaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
+               'zaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
+               'aspectmode': 'cube'},
+        margin={'l': 0, 'r': 0, 't': 0, 'b': 0},
         uirevision='stable',
         scene_camera=camera_data,
         legend=dict(yanchor="top", y=0.95, xanchor="left", x=0.05, bgcolor="rgba(0,0,0,0.5)")
     )
     
-    return fig, [
-        html.Div([
-            html.Div([html.Span("NET FORCE: ", style={'color': '#888'}), f"{np.linalg.norm(net_v):.2f} µN"]),
-            html.Div([html.Span("VECTOR: ", style={'color': '#888'}), f"[{net_v[0]:.1f}, {net_v[1]:.1f}, {net_v[2]:.1f}]"]),
-            html.Div([html.Span("MAX PRESSURE: ", style={'color': '#888'}), f"{np.max(p):.0f} Pa"])
-        ])
-    ]
+    # --- Stats panel ---
+    stats_lines.append(html.Div([html.Span("MATERIAL: ", style={'color': '#888'}), mat_info['name']]))
+    stats_lines.append(html.Hr(style={'margin': '5px 0'}))
+    stats_lines.append(html.Div([html.Span("NET FORCE: ", style={'color': '#888'}), f"{np.linalg.norm(net_v):.4e}"]))
+    stats_lines.append(html.Div([html.Span("VECTOR: ", style={'color': '#888'}),
+                                  f"[{net_v[0]:.2e}, {net_v[1]:.2e}, {net_v[2]:.2e}]"]))
+    stats_lines.append(html.Div([html.Span("MAX PRESSURE: ", style={'color': '#888'}), f"{np.max(p_amp):.0f} Pa"]))
+    stats_lines.append(html.Div([html.Span("MAX VELOCITY: ", style={'color': '#888'}), f"{np.max(v_speed):.2e} mm/s"]))
+    
+    return fig, [html.Div(stats_lines)]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -291,7 +459,7 @@ if __name__ == "__main__":
         raw = np.loadtxt(src_file)
         SOURCES = np.column_stack((raw[:, 0], raw[:, 2], raw[:, 1]))
     else:
-        SOURCES = np.array([[0,0,40], [0,0,-40]])
+        SOURCES = np.array([[0, 0, 40], [0, 0, -40]])
 
     print(f"\n--- RESTARTING ON PORT 8095 ---\n")
     webbrowser.open("http://127.0.0.1:8095")
