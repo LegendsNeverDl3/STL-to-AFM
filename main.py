@@ -155,11 +155,12 @@ app.layout = dbc.Container([
                             id='field-toggles',
                             options=[
                                 {'label': '  Color by Pressure', 'value': 'pressure_color'},
-                                {'label': '  Show Velocity Arrows', 'value': 'velocity_arrows'},
-                                {'label': '  Show Force Arrows', 'value': 'force_arrows'},
-                                {'label': '  Show Gravity', 'value': 'gravity_arrows'},
+                                {'label': '  Show Velocity (Cyan)', 'value': 'velocity_arrows'},
+                                {'label': '  Show Acoustic Force (Yellow)', 'value': 'acoustic_arrows'},
+                                {'label': '  Show Gravity (Red)', 'value': 'gravity_arrows'},
+                                {'label': '  Show Net Force (Green)', 'value': 'net_force_arrows'},
                             ],
-                            value=['pressure_color', 'force_arrows', 'gravity_arrows'],
+                            value=['pressure_color', 'acoustic_arrows', 'gravity_arrows'],
                             className="radio-group",
                             style={'fontSize': '0.85rem'},
                         ),
@@ -305,8 +306,9 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     # --- Parse toggles ---
     show_pressure = 'pressure_color' in (field_toggles or [])
     show_velocity = 'velocity_arrows' in (field_toggles or [])
-    show_force = 'force_arrows' in (field_toggles or [])
+    show_acoustic_force = 'acoustic_arrows' in (field_toggles or [])
     show_gravity = 'gravity_arrows' in (field_toggles or [])
+    show_net_force = 'net_force_arrows' in (field_toggles or [])
 
     # --- Compute acoustic field based on selected model ---
     stats_lines = []
@@ -403,15 +405,15 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
             draw_arrows(c_pts, v_arrow, "#00e0ff", "Velocity (scalar)", scale=4.0)
 
     # 3. Acoustic force arrows
-    if show_force:
-        draw_arrows(c_pts, f_acoustic, "#ffff00", f"Acoustic Force ({model_label})", scale=6.0)
+    if show_acoustic_force:
+        draw_arrows(c_pts, f_acoustic, "#ffff00", f"Acoustic Force ({model_label})", scale=5.0)
 
     # 4. Gravity arrows
     if show_gravity:
-        draw_arrows(c_pts, f_gravity, "#ff0000", "Gravity", scale=6.0)
+        draw_arrows(c_pts, f_gravity, "#ff0000", "Gravity", scale=4.0)
 
-    # 5. Net force arrows (always shown if force is shown)
-    if show_force:
+    # 5. Net force arrows
+    if show_net_force:
         draw_arrows(c_pts, f_net, "#00ff00", "Net Force", scale=6.0)
 
     # 6. Transducer positions
