@@ -328,7 +328,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     stats_lines = []
     mat_info = get_material(material_key)
     f1, f2 = get_contrast_factors(material_key)
-    
+
     if force_model == 'gorkov':
         # Gorkov evaluates body forces. To map this to surface nodes like Simplified model,
         # we treat each face as a discrete sub-particle containing an equal fraction of the mass/volume.
@@ -356,7 +356,9 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     total_mass = mesh.volume * mat_info['rho']  # g (in mm/g unit system)
     f_gravity = np.zeros_like(f_acoustic)
     # The trandducers were mapped to the Z-axis on load, so gravity should pull down -Z
+    # TODO: Make gravity direction dependent on transducer orientation / Fixed
     f_gravity[:, 2] = -(total_mass * 9806.65) / len(a_pts)  # gravity in mm/s^2
+
     
     f_net = f_acoustic + f_gravity
     net_v = np.sum(f_net, axis=0)
@@ -371,7 +373,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
             intensity=p_amp, intensitymode='cell',
             colorscale='Viridis', colorbar=dict(title='Pressure (Pa)', x=1.0, len=0.5, y=0.75),
-            opacity=0.9, flatshading=True,
+            opacity=1.0, flatshading=True,
             lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
             name='Acoustic Target',
         ))
@@ -459,20 +461,23 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     # the maximum screen size even when they are physically near zero.
     # By using a fixed reference magnitude, 1 unit of visual arrow length 
     # perfectly equals a fixed physical unit of force (g mm / s^2) across the board.
-    # Reference: ~500 units of force produces a length 5.0 arrow.
-    fixed_physics_scale = 500.0
+    fixed_physics_scale = 10000.0
 
-    # 3. Acoustic force arrows
+    # 3. Acoustic force arrows (Local Surface Squeezing Forces)
     if show_acoustic_force:
-        draw_arrows(c_pts, f_acoustic, "#ff00ff", f"Acoustic Force ({model_label})", scale=5.0, ref_mag=fixed_physics_scale)
+        draw_arrows(c_pts, f_acoustic, "#ff00ff", f"Acoustic Force ({model_label})", scale=2.0)
 
-    # 4. Gravity arrows
+    # Calculate absolute global gravity for rendering scale reference
+    global_gravity_mag = total_mass * 9806.65
+    
+    # 4. Gravity arrow (Single Global Free-Body Force)
     if show_gravity:
-        draw_arrows(c_pts, f_gravity, "#ff0000", "Gravity", scale=5.0, ref_mag=fixed_physics_scale)
+        global_g_vec = np.array([[0.0, 0.0, -global_gravity_mag]])
+        draw_arrows(np.array([[x, y, z]]), global_g_vec, "#ff0000", "Global Gravity", scale=5.0, ref_mag=global_gravity_mag)
 
-    # 5. Net force arrows
+    # 5. Net force arrow (Single Global Free-Body Lift Force)
     if show_net_force:
-        draw_arrows(c_pts, f_net, "#ff8800", "Net Force", scale=5.0, ref_mag=fixed_physics_scale)
+        draw_arrows(np.array([[x, y, z]]), np.array([net_v]), "#ff8800", "Global Net Lift", scale=5.0, ref_mag=global_gravity_mag)
 
     # 6. Transducer positions
     fig.add_trace(go.Scatter3d(x=SOURCES[:, 0], y=SOURCES[:, 1], z=SOURCES[:, 2],

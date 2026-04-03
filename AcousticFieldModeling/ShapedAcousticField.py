@@ -243,7 +243,7 @@ def plot_3d_surface_field(mesh, centroids, field_data, sources):
         intensitymode='cell',
         colorscale='Viridis',
         colorbar=dict(title='Pressure (Pa)', x=1.0),
-        opacity=0.9,  # Mostly solid to clearly see pressure colors
+        opacity=1.0,  # Completely solid
         flatshading=True,
         name='Pressure on Surface',
     ))
