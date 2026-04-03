@@ -243,10 +243,23 @@ def plot_3d_surface_field(mesh, centroids, field_data, sources):
         intensitymode='cell',
         colorscale='Viridis',
         colorbar=dict(title='Pressure (Pa)', x=1.0),
-        opacity=0.7,
+        opacity=0.9,  # Mostly solid to clearly see pressure colors
         flatshading=True,
         name='Pressure on Surface',
     ))
+
+    # Add white outline (wireframe) around each polygon
+    if hasattr(mesh, 'edges_unique'):
+        edge_vertices = mesh.vertices[mesh.edges_unique]
+        lines_x = np.insert(edge_vertices[:, :, 0], 2, np.nan, axis=1).flatten()
+        lines_y = np.insert(edge_vertices[:, :, 1], 2, np.nan, axis=1).flatten()
+        lines_z = np.insert(edge_vertices[:, :, 2], 2, np.nan, axis=1).flatten()
+        fig.add_trace(go.Scatter3d(
+            x=lines_x, y=lines_y, z=lines_z,
+            mode='lines', line=dict(color='white', width=2),
+            name='Polygon Lines', showlegend=False,
+            hoverinfo='none'
+        ))
 
     # 2. Velocity vectors as arrows on surface
     v_real = np.real(field_data['v_vectors'][start:end])
@@ -285,7 +298,7 @@ def plot_3d_surface_field(mesh, centroids, field_data, sources):
 
     fig.add_trace(go.Scatter3d(
         x=fx_lines, y=fy_lines, z=fz_lines,
-        mode='lines', line=dict(color='#ff5555', width=3),
+        mode='lines', line=dict(color='#ff5555', width=3), # Magenta
         name='Gorkov Force', showlegend=True,
     ))
 

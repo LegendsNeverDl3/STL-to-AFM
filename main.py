@@ -166,11 +166,11 @@ app.layout = dbc.Container([
                             options=[
                                 {'label': '  Color by Pressure', 'value': 'pressure_color'},
                                 {'label': '  Show Velocity (Cyan)', 'value': 'velocity_arrows'},
-                                {'label': '  Show Acoustic Force (Yellow)', 'value': 'acoustic_arrows'},
+                                {'label': '  Show Acoustic Force (Magenta)', 'value': 'acoustic_arrows'},
                                 {'label': '  Show Gravity (Red)', 'value': 'gravity_arrows'},
-                                {'label': '  Show Net Force (Green)', 'value': 'net_force_arrows'},
+                                {'label': '  Show Net Force (Orange)', 'value': 'net_force_arrows'},
                             ],
-                            value=['pressure_color', 'acoustic_arrows', 'gravity_arrows'],
+                            value=['pressure_color', 'acoustic_arrows'],
                             className="radio-group",
                             style={'fontSize': '0.85rem'},
                         ),
@@ -371,7 +371,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
             intensity=p_amp, intensitymode='cell',
             colorscale='Viridis', colorbar=dict(title='Pressure (Pa)', x=1.0, len=0.5, y=0.75),
-            opacity=0.7, flatshading=True,
+            opacity=0.9, flatshading=True,
             lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
             name='Acoustic Target',
         ))
@@ -379,9 +379,22 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
         fig.add_trace(go.Mesh3d(
             x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-            color='#00e0ff', opacity=0.35, flatshading=True,
+            color='#00e0ff', opacity=0.3, flatshading=True,
             lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
             name='Acoustic Target',
+        ))
+
+    # Add white outline (wireframe) around each polygon to make it clearly visible
+    if hasattr(mesh, 'edges_unique'):
+        edge_vertices = mesh.vertices[mesh.edges_unique]
+        lines_x = np.insert(edge_vertices[:, :, 0], 2, np.nan, axis=1).flatten()
+        lines_y = np.insert(edge_vertices[:, :, 1], 2, np.nan, axis=1).flatten()
+        lines_z = np.insert(edge_vertices[:, :, 2], 2, np.nan, axis=1).flatten()
+        fig.add_trace(go.Scatter3d(
+            x=lines_x, y=lines_y, z=lines_z,
+            mode='lines', line=dict(color='white', width=2),
+            name='Polygon Lines', showlegend=False,
+            hoverinfo='none'
         ))
 
     # --- Arrow drawing helper using 3D cones ---
@@ -451,7 +464,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
 
     # 3. Acoustic force arrows
     if show_acoustic_force:
-        draw_arrows(c_pts, f_acoustic, "#ffff00", f"Acoustic Force ({model_label})", scale=5.0, ref_mag=fixed_physics_scale)
+        draw_arrows(c_pts, f_acoustic, "#ff00ff", f"Acoustic Force ({model_label})", scale=5.0, ref_mag=fixed_physics_scale)
 
     # 4. Gravity arrows
     if show_gravity:
@@ -459,7 +472,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
 
     # 5. Net force arrows
     if show_net_force:
-        draw_arrows(c_pts, f_net, "#00ff00", "Net Force", scale=5.0, ref_mag=fixed_physics_scale)
+        draw_arrows(c_pts, f_net, "#ff8800", "Net Force", scale=5.0, ref_mag=fixed_physics_scale)
 
     # 6. Transducer positions
     fig.add_trace(go.Scatter3d(x=SOURCES[:, 0], y=SOURCES[:, 1], z=SOURCES[:, 2],
