@@ -71,16 +71,25 @@ app.index_string = '''
         {%favicon%}
         {%css%}
         <style>
-            .black-text-input input { color: black !important; background-color: white !important; font-weight: bold !important; height: 32px !important; border: 1px solid #ced4da !important; border-radius: 4px !important; }
-            .black-text-label { color: #212529 !important; font-weight: 700 !important; font-size: 0.9rem; }
-            .stats-text { color: #000 !important; background-color: #f8f9fa !important; padding: 15px; border-radius: 10px; font-family: 'Consolas', monospace; font-size: 0.85rem; border-left: 5px solid #28a745; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1); }
-            .card-header { color: #212529 !important; background-color: #e9ecef !important; font-weight: 800 !important; font-size: 1.1rem; padding: 12px; border-bottom: 2px solid #dee2e6 !important; }
-            .control-card { border: none !important; border-radius: 15px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.4); overflow: hidden; }
-            .section-header { color: #6c757d; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; margin-top: 15px; border-bottom: 1px solid #dee2e6; padding-bottom: 5px; margin-bottom: 10px; }
-            .control-row { margin-bottom: 12px; padding: 0 5px; }
-            body { background: radial-gradient(circle at center, #1e1e2f 0%, #0d0d12 100%) !important; }
-            .radio-group label { color: #495057 !important; font-weight: 600 !important; }
-            .dropdown-dark .Select-control { background-color: white !important; }
+            body { background: radial-gradient(circle at center, #1a1c2c 0%, #0a0b14 100%) !important; color: #e0e0e0; font-family: 'Inter', sans-serif; }
+            .control-card { background-color: rgba(30, 32, 48, 0.85) !important; border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 15px !important; backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+            .card-header { background: linear-gradient(90deg, #2a2d3e, #1e2030) !important; color: #00e0ff !important; font-weight: 800 !important; letter-spacing: 1px; border-bottom: 1px solid rgba(255,255,255,0.1) !important; }
+            .section-header { color: #6c757d; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 4px; margin: 15px 0 10px 0; }
+            .control-label { color: #b0b3b8 !important; font-weight: 600 !important; font-size: 0.85rem; margin-bottom: 4px; }
+            .dark-input { background-color: #0d0e1a !important; color: #ffffff !important; border: 1px solid #30363d !important; font-weight: bold !important; height: 32px !important; }
+            .dark-input:focus { border-color: #00e0ff !important; box-shadow: 0 0 10px rgba(0, 224, 255, 0.2) !important; }
+            .stats-text { background-color: rgba(0,0,0,0.3) !important; color: #ffffff !important; border-left: 3px solid #00e0ff; padding: 12px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 0.8rem; line-height: 1.5; }
+            .accordion-button { background-color: transparent !important; color: #ffffff !important; font-size: 0.9rem !important; font-weight: 700 !important; border: none !important; }
+            .accordion-button:not(.collapsed) { background-color: rgba(0,224,255,0.1) !important; color: #00e0ff !important; box-shadow: none !important; }
+            .accordion-item { background-color: transparent !important; border: none !important; border-bottom: 1px solid rgba(255,255,255,0.05) !important; }
+            .accordion-body { padding: 15px 10px !important; }
+            .rc-slider-rail { background-color: #30363d !important; }
+            .rc-slider-track { background-color: #00e0ff !important; }
+            .rc-slider-handle { border-color: #00e0ff !important; background-color: #00e0ff !important; }
+            .Select-control { background-color: #0d0e1a !important; border: 1px solid #30363d !important; height: 32px !important; }
+            .Select-value-label { color: white !important; }
+            .Select-menu-outer { background-color: #1e2030 !important; color: white !important; }
+            .radio-group label { color: #e0e0e0 !important; cursor: pointer; }
         </style>
     </head>
     <body class="control-panel">
@@ -101,142 +110,101 @@ app.layout = dbc.Container([
     dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}}),
     
     dbc.Row([
-        dbc.Col(html.H1("Force/Mapping Simulator", className="text-center my-4", style={'color': 'white', 'fontWeight': '200', 'letterSpacing': '2px'}), width=12)
+        dbc.Col(html.H1("Acoustic Levitation Simulator", className="text-center my-4", style={'color': '#00e0ff', 'fontWeight': '200', 'letterSpacing': '4px'}), width=12)
     ]),
+    
     dbc.Row([
+        # --- LEFT SIDEBAR (Width 3) ---
         dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Simulator Controls"),
+                dbc.CardHeader("CONTROLS"),
                 dbc.CardBody([
-                    html.Div([
-                        html.Label("Interaction Mode", className="black-text-label"),
-                        dbc.RadioItems(
-                            id='rotation-mode',
-                            options=[
-                                {'label': 'Independent (Rotate Object)', 'value': 'object'},
-                                {'label': 'Global (Rotate World)', 'value': 'world'}
-                            ],
-                            value='world',
-                            className="mb-3 radio-group",
-                            inline=True
-                        ),
-                    ]),
-                    
-                    # --- Acoustic Field Controls ---
-                    html.Div("Acoustic Field", className="section-header"),
-                    
-                    html.Div([
-                        html.Label("Force Model", className="black-text-label"),
-                        dcc.Dropdown(
-                            id='force-model',
-                            options=[
-                                {'label': 'Simplified (p^2/rho*c^2)', 'value': 'simplified'},
-                                {'label': 'Gorkov Potential', 'value': 'gorkov'},
-                            ],
-                            value='simplified',
-                            clearable=False,
-                            style={'color': 'black', 'fontWeight': '600'},
-                        ),
-                    ], className="control-row"),
-                    
-                    html.Div([
-                        html.Label("Material Preset", className="black-text-label"),
-                        dcc.Dropdown(
+                    dbc.Accordion([
+                        # Category 1: Environment Setup
+                        dbc.AccordionItem([
+                            html.Label("Interaction Mode", className="control-label"),
+                            dbc.RadioItems(
+                                id='rotation-mode',
+                                options=[
+                                    {'label': 'Object', 'value': 'object'},
+                                    {'label': 'World', 'value': 'world'}
+                                ],
+                                value='world',
+                                className="mb-3 radio-group",
+                                inline=True, style={'fontSize': '0.8rem'}
+                            ),
+                            
+                            html.Label("Force Model", className="control-label"),
+                            dcc.Dropdown(
+                                id='force-model',
+                                options=[
+                                    {'label': 'Simplified (Radiation)', 'value': 'simplified'},
+                                    {'label': 'Gorkov Potential', 'value': 'gorkov'},
+                                ],
+                                value='simplified', clearable=False, className="mb-3"
+                            ),
+                            
+                            html.Label("Object Material", className="control-label"),
+                            dcc.Dropdown(
                                 id='material-preset',
                                 options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()],
-                                value='polystyrene_foam',
-                                clearable=False,
-                                style={'color': 'black', 'fontWeight': '600'},
+                                value='polystyrene_foam', clearable=False, className="mb-3"
                             ),
-                    ], className="control-row"),
+                            
+                            html.Label("Sound Power (%)", className="control-label"),
+                            dcc.Slider(id='sound-power', min=1, max=100, step=1, value=100, tooltip={"always_visible": False}),
+                            
+                            html.Label("Phase Shift (°)", className="control-label", style={'marginTop': '10px'}),
+                            dcc.Slider(id='phase-shift', min=0, max=360, step=1, value=0),
+                        ], title="Environment Setup"),
+                        
+                        # Category 2: Physics Toggles
+                        dbc.AccordionItem([
+                            dbc.Checklist(
+                                id='field-toggles',
+                                options=[
+                                    {'label': ' Pressure Mapping', 'value': 'pressure_color'},
+                                    {'label': ' Velocity Field', 'value': 'velocity_arrows'},
+                                    {'label': ' Acoustic Force', 'value': 'acoustic_arrows'},
+                                    {'label': ' Gravitational F', 'value': 'gravity_arrows'},
+                                    {'label': ' GLOBAL NET FORCE', 'value': 'net_force_arrows'},
+                                ],
+                                value=['pressure_color', 'acoustic_arrows'],
+                                className="radio-group", style={'fontSize': '0.85rem'}
+                            ),
+                        ], title="Physics Visualization"),
+                        
+                        # Category 3: Translation (6-DOF)
+                        dbc.AccordionItem([
+                            *[html.Div([
+                                dbc.Row([
+                                    dbc.Col(html.Label(f"{axis}", className="control-label"), width=6),
+                                    dbc.Col(dbc.Input(id=f'inp-{axis.lower()}', type='number', value=0, size="sm", className="dark-input"), width=6)
+                                ]),
+                                dcc.Slider(id=f'pos-{axis.lower()}', min=-40 if axis=='Z' else -25, max=40 if axis=='Z' else 25, 
+                                           step=0.1, value=0)
+                            ], className="mb-3") for axis in ['X', 'Y', 'Z']],
+                        ], title="Object Translation"),
+                        
+                        # Category 4: Rotation (6-DOF)
+                        dbc.AccordionItem([
+                            *[html.Div([
+                                dbc.Row([
+                                    dbc.Col(html.Label(f"{label}", className="control-label"), width=6),
+                                    dbc.Col(dbc.Input(id=f'inp-r{axis}', type='number', value=0, size="sm", className="dark-input"), width=6)
+                                ]),
+                                dcc.Slider(id=f'rot-{axis}', min=0, max=360, step=1, value=0)
+                            ], className="mb-3") for axis, label in zip(['x', 'y', 'z'], ['Pitch (X)', 'Yaw (Y)', 'Roll (Z)'])]
+                        ], title="Object Rotation"),
+                    ], start_collapsed=True, flush=True),
                     
-                    html.Div([
-                        html.Label("Phase Difference (Top vs Bottom °)", className="black-text-label"),
-                        dcc.Slider(
-                            id='phase-shift',
-                            min=0, max=360, step=1, value=0,
-                            marks={0: '0', 90: '90', 180: '180', 270: '270', 360: '360'},
-                            tooltip={"placement": "bottom", "always_visible": False}
-                        )
-                    ], className="control-row", style={'marginTop': '15px'}),
-                    
-                    html.Div([
-                        dbc.Checklist(
-                            id='field-toggles',
-                            options=[
-                                {'label': '  Color by Pressure', 'value': 'pressure_color'},
-                                {'label': '  Show Velocity (Cyan)', 'value': 'velocity_arrows'},
-                                {'label': '  Show Acoustic Force (Magenta)', 'value': 'acoustic_arrows'},
-                                {'label': '  Show Gravity (Red)', 'value': 'gravity_arrows'},
-                                {'label': '  Show Net Force (Orange)', 'value': 'net_force_arrows'},
-                            ],
-                            value=['pressure_color', 'acoustic_arrows'],
-                            className="radio-group",
-                            style={'fontSize': '0.85rem'},
-                        ),
-                    ], className="control-row"),
-                    
-                    html.Div("Translation (mm)", className="section-header"),
-                    # X Position
-                    html.Div([
-                        dbc.Row([
-                            dbc.Col(html.Label("X-Axis", className="black-text-label"), width=7),
-                            dbc.Col(dbc.Input(id='inp-x', type='number', value=0, className="black-text-input"), width=5)
-                        ]),
-                        dcc.Slider(id='pos-x', min=-25, max=25, step=1, value=0, marks={-25:'-25',0:'0',25:'25'}),
-                    ], className="control-row"),
-                    
-                    # Y Position
-                    html.Div([
-                        dbc.Row([
-                            dbc.Col(html.Label("Y-Axis", className="black-text-label"), width=7),
-                            dbc.Col(dbc.Input(id='inp-y', type='number', value=0, className="black-text-input"), width=5)
-                        ]),
-                        dcc.Slider(id='pos-y', min=-25, max=25, step=1, value=0, marks={-25:'-25',0:'0',25:'25'}),
-                    ], className="control-row"),
-                    
-                    # Z Position
-                    html.Div([
-                        dbc.Row([
-                            dbc.Col(html.Label("Z-Axis", className="black-text-label"), width=7),
-                            dbc.Col(dbc.Input(id='inp-z', type='number', value=0, className="black-text-input"), width=5)
-                        ]),
-                        dcc.Slider(id='pos-z', min=-40, max=40, step=1, value=0, marks={-40:'-40',0:'0',40:'40'}),
-                    ], className="control-row"),
-                    
-                    html.Div("Rotation (Degrees)", className="section-header"),
-                    # X Rotation
-                    html.Div([
-                        dbc.Row([
-                            dbc.Col(html.Label("Pitch (X)", className="black-text-label"), width=7),
-                            dbc.Col(dbc.Input(id='inp-rx', type='number', value=0, className="black-text-input"), width=5)
-                        ]),
-                        dcc.Slider(id='rot-x', min=0, max=360, step=1, value=0, marks={0:'0', 180:'180', 360:'360'}),
-                    ], className="control-row"),
-                    
-                    # Y Rotation
-                    html.Div([
-                        dbc.Row([
-                            dbc.Col(html.Label("Yaw (Y)", className="black-text-label"), width=7),
-                            dbc.Col(dbc.Input(id='inp-ry', type='number', value=0, className="black-text-input"), width=5)
-                        ]),
-                        dcc.Slider(id='rot-y', min=0, max=360, step=1, value=0, marks={0:'0', 180:'180', 360:'360'}),
-                    ], className="control-row"),
-                    
-                    # Z Rotation
-                    html.Div([
-                        dbc.Row([
-                            dbc.Col(html.Label("Roll (Z)", className="black-text-label"), width=7),
-                            dbc.Col(dbc.Input(id='inp-rz', type='number', value=0, className="black-text-input"), width=5)
-                        ]),
-                        dcc.Slider(id='rot-z', min=0, max=360, step=1, value=0, marks={0:'0', 180:'180', 360:'360'}),
-                    ], className="control-row"),
-                    
-                    html.Hr(),
+                    html.Hr(style={'borderColor': 'rgba(255,255,255,0.1)'}),
                     html.Div(id='stats-target', className="stats-text")
-                ], style={'backgroundColor': '#f8f9fa', 'padding': '15px'})
+                ])
             ], className="control-card")
         ], width=3),
+        
+        # --- MAIN SIMULATOR VIEW (Width 9) ---
         dbc.Col([
             dbc.Card([
                 dcc.Graph(id='live-graph', style={'height': '85vh'}, config={'displayModeBar': False})
@@ -288,13 +256,17 @@ def sync_controls(sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, relayout
     [Input('pos-x', 'value'), Input('pos-y', 'value'), Input('pos-z', 'value'), 
      Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value'),
      Input('force-model', 'value'), Input('material-preset', 'value'),
-     Input('field-toggles', 'value'), Input('phase-shift', 'value')],
+     Input('field-toggles', 'value'), Input('phase-shift', 'value'), Input('sound-power', 'value')],
     [State('live-graph', 'relayoutData'), State('rotation-mode', 'value'), State('camera-store', 'data')]
 )
-def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles, phase_shift_deg,
+def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles, phase_shift_deg, sound_power_pct,
                    relayout, mode, camera_data):
-    # --- Update active material ---
+    # --- Update active material and parameters ---
     mat_module.ACTIVE_MATERIAL = material_key
+    
+    # Scale base amplitude by power percentage
+    power_mult = (sound_power_pct or 100) / 100.0
+    effective_amplitude = AMPLITUDE * power_mult
 
     # --- Load and transform mesh ---
     mesh = trimesh.load(STL_PATH)
@@ -335,7 +307,10 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
         vol_per_face = mesh.volume / max(1, len(a_pts))
         p_amp, v_speed, v_vectors, gorkov_U, gorkov_force = \
             compute_gorkov_forces(c_pts, SOURCES, vol_per_face, phases=phases)
-        f_acoustic = gorkov_force
+            
+        # Manually scale forces by amp multiplier squared for Gorkov (U ~ P^2)
+        f_acoustic = gorkov_force * (power_mult ** 2)
+        p_amp *= power_mult # p scales linearly
         model_label = "Gorkov"
         stats_lines.append(html.Div([html.Span("MODEL: ", style={'color': '#888'}), "Gorkov Potential"]))
         stats_lines.append(html.Div([html.Span("PHASE: ", style={'color': '#888'}), f"Top offset {phase_shift_deg}°"]))
@@ -346,7 +321,10 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
                                          f"min={np.min(gorkov_U):.2e} max={np.max(gorkov_U):.2e}"]))
     else:
         p_amp, v_scalar, f_acoustic = compute_simplified_forces(c_pts, n_pts, a_pts, SOURCES, phases=phases)
-        v_speed = v_scalar
+        # Simplified radiation pressure scales with P^2
+        f_acoustic *= (power_mult ** 2)
+        p_amp *= power_mult
+        v_speed = v_scalar * power_mult
         v_vectors = None
         gorkov_U = None
         model_label = "Simplified"
@@ -362,6 +340,10 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     
     f_net = f_acoustic + f_gravity
     net_v = np.sum(f_net, axis=0)
+    
+    # Calculate global sums for debugging
+    total_acoustic_f = np.sum(f_acoustic, axis=0)
+    total_gravity_f = np.sum(f_gravity, axis=0)
 
     # --- Build Figure ---
     fig = go.Figure()
@@ -417,10 +399,16 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
         m_sub = mags[idx]
         # Linearly scale relative to the reference magnitude
         vis_scale = scale / avg
-        vis_mags = m_sub * vis_scale
         
-        # Enforce a generous cap: no arrow can be drawn larger than 15x the scale
-        # This keeps normal vectors large, but stops gravity from exploding the screen.
+        # Logarithmic magnitude scaling for wide dynamic range
+        # Result: Arrow shrinks clearly when approaching zero, but doesn't grow infinitely large.
+        if ref_mag is not None:
+            # Normalized log scale: y = scale * log1p(mag / ref)
+            log_mags = np.log1p(mags[idx] / ref_mag)
+            vis_mags = scale * log_mags
+        else:
+            vis_mags = mags[idx] * vis_scale
+        
         max_multiplier = 15.0
         
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -429,9 +417,23 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
             if np.any(mask):
                 cap_factors[mask] = (scale * max_multiplier) / vis_mags[mask]
                 
-            u = u * vis_scale * cap_factors
-            v = v * vis_scale * cap_factors
-            w = w * vis_scale * cap_factors
+            # Compute unit vectors and scale by vis_mags
+            norm_u = np.zeros_like(u)
+            norm_v = np.zeros_like(v)
+            norm_w = np.zeros_like(w)
+            
+            non_zero = mags[idx] > 1e-12
+            norm_u[non_zero] = u[non_zero] / mags[idx][non_zero]
+            norm_v[non_zero] = v[non_zero] / mags[idx][non_zero]
+            norm_w[non_zero] = w[non_zero] / mags[idx][non_zero]
+            
+            u = norm_u * vis_mags * cap_factors
+            v = norm_v * vis_mags * cap_factors
+            w = norm_w * vis_mags * cap_factors
+            
+            # Additional visual logic: if the vector is nearly zero, hide it
+            if np.all(vis_mags < 1e-9):
+                return
             
         dynamic_sizeref = scale * 1.5
             
@@ -475,9 +477,9 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
         global_g_vec = np.array([[0.0, 0.0, -global_gravity_mag]])
         draw_arrows(np.array([[x, y, z]]), global_g_vec, "#ff0000", "Global Gravity", scale=5.0, ref_mag=global_gravity_mag)
 
-    # 5. Net force arrow (Single Global Free-Body Lift Force)
+    # 5. Net force arrow (Single Global Free-Body Force)
     if show_net_force:
-        draw_arrows(np.array([[x, y, z]]), np.array([net_v]), "#ff8800", "Global Net Lift", scale=5.0, ref_mag=global_gravity_mag)
+        draw_arrows(np.array([[x, y, z]]), np.array([net_v]), "#ff8800", "Global Net Force", scale=5.0, ref_mag=global_gravity_mag)
 
     # 6. Transducer positions
     fig.add_trace(go.Scatter3d(x=SOURCES[:, 0], y=SOURCES[:, 1], z=SOURCES[:, 2],
@@ -500,8 +502,11 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     
     # --- Stats panel ---
     stats_lines.append(html.Div([html.Span("MATERIAL: ", style={'color': '#888'}), mat_info['name']]))
+    stats_lines.append(html.Div([html.Span("MASS: ", style={'color': '#888'}), f"{total_mass:.4e} g ({total_mass*1000:.2f} mg)"]))
     stats_lines.append(html.Hr(style={'margin': '5px 0'}))
     stats_lines.append(html.Div([html.Span("NET FORCE: ", style={'color': '#888'}), f"{np.linalg.norm(net_v):.4e}"]))
+    stats_lines.append(html.Div([html.Span("  Acoustic (Z): ", style={'color': '#888'}), f"{total_acoustic_f[2]:+.2e}"]))
+    stats_lines.append(html.Div([html.Span("  Gravity  (Z): ", style={'color': '#888'}), f"{total_gravity_f[2]:+.2e}"]))
     stats_lines.append(html.Div([html.Span("VECTOR: ", style={'color': '#888'}),
                                   f"[{net_v[0]:.2e}, {net_v[1]:.2e}, {net_v[2]:.2e}]"]))
     stats_lines.append(html.Div([html.Span("MAX PRESSURE: ", style={'color': '#888'}), f"{np.max(p_amp):.0f} Pa"]))
