@@ -30,7 +30,7 @@ from materials import get_medium, print_active_config, AMPLITUDE
 ##########################################################################################
 # Configuration
 ##########################################################################################
-DEFAULT_STL = os.path.join(os.path.dirname(__file__), '..', '3D_Files', 'cube_50mm.stl')
+DEFAULT_STL = os.path.join(os.path.dirname(__file__), '..', '3D_Files', 'Tetrahedron.stl')
 DEFAULT_SCALE = 0.1
 OFFSET_LAYERS = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]
 GRID_RESOLUTION = 51

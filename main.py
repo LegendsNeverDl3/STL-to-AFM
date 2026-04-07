@@ -86,9 +86,30 @@ app.index_string = '''
             .rc-slider-rail { background-color: #30363d !important; }
             .rc-slider-track { background-color: #00e0ff !important; }
             .rc-slider-handle { border-color: #00e0ff !important; background-color: #00e0ff !important; }
-            .Select-control { background-color: #0d0e1a !important; border: 1px solid #30363d !important; height: 32px !important; }
-            .Select-value-label { color: white !important; }
-            .Select-menu-outer { background-color: #1e2030 !important; color: white !important; }
+            /* Broad Dash Dropdown Fix */
+            .dash-dropdown, .dash-dropdown-search, .dash-dropdown-option {
+                background-color: #0d0e1a !important;
+                border: 1px solid #30363d !important;
+                color: #ffffff !important;
+            }
+            /* Target all internal text elements regardless of tag */
+            .dash-dropdown *, .dash-dropdown-search * {
+                color: #ffffff !important;
+                background-color: transparent !important;
+            }
+            .dash-dropdown-option:hover, .dash-options-list-option:hover, .dash-options-list-option.selected {
+                background-color: #00e0ff !important;
+                color: #000000 !important;
+            }
+            .dash-dropdown-option:hover *, .dash-options-list-option:hover * {
+                color: #000000 !important;
+            }
+            /* Legacy fallback */
+            .Select-control, .Select-menu-outer, .Select-value-label { 
+                background-color: #0d0e1a !important; 
+                color: #ffffff !important; 
+            }
+            /* End Dropdown Styling */
             .radio-group label { color: #e0e0e0 !important; cursor: pointer; }
         </style>
     </head>
@@ -105,6 +126,11 @@ app.index_string = '''
 
 # Build material dropdown options
 material_options = [{'label': v['name'], 'value': k} for k, v in MATERIALS.items()]
+
+# Scan for available STL files
+stl_files = [f for f in os.listdir('3D_Files') if f.endswith('.stl')]
+stl_options = [{'label': f.replace('.stl', ''), 'value': os.path.join('3D_Files', f)} for f in stl_files]
+default_stl = os.path.join('3D_Files', 'Tetrahedron.stl') if 'Tetrahedron.stl' in stl_files else stl_options[0]['value']
 
 app.layout = dbc.Container([
     dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}}),
@@ -144,6 +170,16 @@ app.layout = dbc.Container([
                                 value='simplified', clearable=False, className="mb-3"
                             ),
                             
+                            html.Label("3D Object", className="control-label"),
+                            dcc.Dropdown(
+                                id='selected-object',
+                                options=stl_options,
+                                value=default_stl, clearable=False, className="mb-3"
+                            ),
+                            
+                            html.Label("Object Scale", className="control-label"),
+                            dbc.Input(id='object-scale', type='number', value=0.04, step=0.001, className="mb-3 dark-input"),
+
                             html.Label("Object Material", className="control-label"),
                             dcc.Dropdown(
                                 id='material-preset',
@@ -151,11 +187,11 @@ app.layout = dbc.Container([
                                 value='polystyrene_foam', clearable=False, className="mb-3"
                             ),
                             
-                            html.Label("Sound Power (%)", className="control-label"),
-                            dcc.Slider(id='sound-power', min=1, max=100, step=1, value=100, tooltip={"always_visible": False}),
+                            html.Label(["Sound Power: ", html.Span(id='sp-val', children='100'), "%"], className="control-label"),
+                            dcc.Slider(id='sound-power', min=1, max=100, step=1, value=100, tooltip={"always_visible": True, "placement": "bottom"}),
                             
-                            html.Label("Phase Shift (°)", className="control-label", style={'marginTop': '10px'}),
-                            dcc.Slider(id='phase-shift', min=0, max=360, step=1, value=0),
+                            html.Label(["Phase Shift: ", html.Span(id='ps-val', children='0'), "°"], className="control-label", style={'marginTop': '10px'}),
+                            dcc.Slider(id='phase-shift', min=0, max=360, step=1, value=0, tooltip={"always_visible": True, "placement": "bottom"}),
                         ], title="Environment Setup"),
                         
                         # Category 2: Physics Toggles
@@ -164,6 +200,7 @@ app.layout = dbc.Container([
                                 id='field-toggles',
                                 options=[
                                     {'label': ' Pressure Mapping', 'value': 'pressure_color'},
+                                    {'label': ' Gorkov Potential Map', 'value': 'gorkov_color'},
                                     {'label': ' Velocity Field', 'value': 'velocity_arrows'},
                                     {'label': ' Acoustic Force', 'value': 'acoustic_arrows'},
                                     {'label': ' Gravitational F', 'value': 'gravity_arrows'},
@@ -252,14 +289,23 @@ def sync_controls(sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, relayout
     return sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, camera_data
 
 @app.callback(
+    [Output('sp-val', 'children'), Output('ps-val', 'children')],
+    [Input('sound-power', 'value'), Input('phase-shift', 'value')]
+)
+def update_slider_labels(sp, ps):
+    return f"{sp}", f"{ps}"
+
+@app.callback(
     [Output('live-graph', 'figure'), Output('stats-target', 'children')],
     [Input('pos-x', 'value'), Input('pos-y', 'value'), Input('pos-z', 'value'), 
      Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value'),
      Input('force-model', 'value'), Input('material-preset', 'value'),
-     Input('field-toggles', 'value'), Input('phase-shift', 'value'), Input('sound-power', 'value')],
+     Input('field-toggles', 'value'), Input('phase-shift', 'value'), Input('sound-power', 'value'),
+     Input('selected-object', 'value'), Input('object-scale', 'value')],
     [State('live-graph', 'relayoutData'), State('rotation-mode', 'value'), State('camera-store', 'data')]
 )
 def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles, phase_shift_deg, sound_power_pct,
+                   stl_path, scale_factor,
                    relayout, mode, camera_data):
     # --- Update active material and parameters ---
     mat_module.ACTIVE_MATERIAL = material_key
@@ -269,12 +315,12 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     effective_amplitude = AMPLITUDE * power_mult
 
     # --- Load and transform mesh ---
-    mesh = trimesh.load(STL_PATH)
+    mesh = trimesh.load(stl_path)
     if isinstance(mesh, trimesh.Scene):
         meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
         mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
-    mesh.apply_scale(SCALE_FACTOR)
-    mesh.vertices -= mesh.bounding_box.centroid
+    mesh.apply_scale(scale_factor or 0.04)
+    mesh.vertices -= mesh.centroid
     
     # Apply Standard Euler Sequential Rotations (X -> Y -> Z)
     r_x = trimesh.transformations.rotation_matrix(np.radians(rx), [1, 0, 0])
@@ -287,6 +333,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
 
     # --- Parse toggles ---
     show_pressure = 'pressure_color' in (field_toggles or [])
+    show_gorkov_map = 'gorkov_color' in (field_toggles or [])
     show_velocity = 'velocity_arrows' in (field_toggles or [])
     show_acoustic_force = 'acoustic_arrows' in (field_toggles or [])
     show_gravity = 'gravity_arrows' in (field_toggles or [])
@@ -348,8 +395,18 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     # --- Build Figure ---
     fig = go.Figure()
 
-    # 1. Mesh — colored by pressure or plain
-    if show_pressure:
+    # 1. Mesh — colored by pressure, gorkov, or plain
+    if show_gorkov_map and gorkov_U is not None:
+        fig.add_trace(go.Mesh3d(
+            x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
+            i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
+            intensity=gorkov_U, intensitymode='cell',
+            colorscale='Portland', colorbar=dict(title='Gorkov U', x=1.0, len=0.5, y=0.75),
+            opacity=1.0, flatshading=True,
+            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
+            name='Acoustic Target',
+        ))
+    elif show_pressure:
         fig.add_trace(go.Mesh3d(
             x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
@@ -516,7 +573,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", type=str, default="3D_Files/cube_50mm.stl")
+    parser.add_argument("--file", type=str, default="3D_Files/Tetrahedron.stl")
     parser.add_argument("--scale", type=float, default=0.04) # 50mm * 0.04 = 2mm object
     args = parser.parse_args()
 
