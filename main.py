@@ -27,31 +27,51 @@ import materials as mat_module
 
 
 # --- Legacy simplified model (kept for "Simplified" mode) ---
+# Iplements a basic radiation pressure model model that calculates pressure
+# at the face of the object and converts it to a force vector pointing inward
+# based on the normal of each face
 def compute_simplified_forces(centroids, normals, face_areas, sources, phases=None):
     """Simplified radiation pressure model: F = p^2/(rho*c^2) * (-n) * A"""
+    # Physical properties of medium(ususally air)
     med = get_medium()
+    #grab density
     rho = med["rho"]
+    #grab speed of sound
     c = med["c"]
-
+    # sums up waves from all 100+ transducers to find the complex pressure at every
+    # face(both volume and timing(phase)) of the sound wave
     p_complex = compute_complex_pressure(centroids, sources, phases)
     p_amplitude = np.abs(p_complex)
+    # acoustic velocity
     v_scalar = p_amplitude / (rho * c)
 
+    # Radiation pressure
     p_rad = (p_amplitude ** 2) / (rho * c ** 2)
+    # force = pressure * area
     f_acoustic = p_rad[:, np.newaxis] * (-normals) * face_areas[:, np.newaxis]
 
     return p_amplitude, v_scalar, f_acoustic
 
 
 # --- Gorkov model ---
+# Calculates the acoustic radiation force on an object using the Gorkov potential
+# Note that this model calculates the force on the volume of the object, not the surface
+# i.e. a sphere. Additionally, it accounts for interaction between the sound pressure
+# and air velocity simultaneously
 def compute_gorkov_forces(centroids, sources, mesh_volume, phases=None):
     """Full Gorkov potential model: F = -grad(U)"""
+    # This is a dimensionless factor that accounts for the difference in acoustic
+    # properties between the object and the medium
     f1, f2 = get_contrast_factors()
-
+    # sums up waves from all 100+ transducers to find the complex pressure at every
+    # face(both volume and timing(phase)) of the sound wave
     p_complex = compute_complex_pressure(centroids, sources, phases)
     p_amplitude = np.abs(p_complex)
+    # acoustic velocity -> oscilations at a certain spot
     v_vectors, v_speed = compute_velocity_vector(centroids, sources, phases)
+    # gorkov potential -> potential energy at a certain spot
     gorkov_U = compute_gorkov_potential(p_complex, v_speed, mesh_volume, f1, f2)
+    # gradient call occurs in here
     gorkov_force = compute_gorkov_force(centroids, sources, mesh_volume, f1, f2, phases)
 
     return p_amplitude, v_speed, v_vectors, gorkov_U, gorkov_force
@@ -186,8 +206,11 @@ app.layout = dbc.Container([
                                 options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()],
                                 value='polystyrene_foam', clearable=False, className="mb-3"
                             ),
+
+                            html.Label(["Mesh subdivision: ", html.Span(id='subdiv-val', children='0')], className="control-label"),
+                            dcc.Slider(id='subdiv-level', min=0, max=3, step=1, value=0, marks={0:'Raw', 1:'Low', 2:'Mid', 3:'High'}),
                             
-                            html.Label(["Sound Power: ", html.Span(id='sp-val', children='100'), "%"], className="control-label"),
+                            html.Label(["Sound Power: ", html.Span(id='sp-val', children='100'), "%"], className="control-label", style={'marginTop': '15px'}),
                             dcc.Slider(id='sound-power', min=1, max=100, step=1, value=100, tooltip={"always_visible": True, "placement": "bottom"}),
                             
                             html.Label(["Phase Shift: ", html.Span(id='ps-val', children='0'), "°"], className="control-label", style={'marginTop': '10px'}),
@@ -200,6 +223,7 @@ app.layout = dbc.Container([
                                 id='field-toggles',
                                 options=[
                                     {'label': ' Pressure Mapping', 'value': 'pressure_color'},
+                                    {'label': ' Local Acoustic Force Map', 'value': 'acoustic_force_color'},
                                     {'label': ' Gorkov Potential Map', 'value': 'gorkov_color'},
                                     {'label': ' Velocity Field', 'value': 'velocity_arrows'},
                                     {'label': ' Acoustic Force', 'value': 'acoustic_arrows'},
@@ -289,11 +313,11 @@ def sync_controls(sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, relayout
     return sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, camera_data
 
 @app.callback(
-    [Output('sp-val', 'children'), Output('ps-val', 'children')],
-    [Input('sound-power', 'value'), Input('phase-shift', 'value')]
+    [Output('sp-val', 'children'), Output('ps-val', 'children'), Output('subdiv-val', 'children')],
+    [Input('sound-power', 'value'), Input('phase-shift', 'value'), Input('subdiv-level', 'value')]
 )
-def update_slider_labels(sp, ps):
-    return f"{sp}", f"{ps}"
+def update_slider_labels(sp, ps, sd):
+    return f"{sp}", f"{ps}", f"{sd}"
 
 @app.callback(
     [Output('live-graph', 'figure'), Output('stats-target', 'children')],
@@ -301,11 +325,11 @@ def update_slider_labels(sp, ps):
      Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value'),
      Input('force-model', 'value'), Input('material-preset', 'value'),
      Input('field-toggles', 'value'), Input('phase-shift', 'value'), Input('sound-power', 'value'),
-     Input('selected-object', 'value'), Input('object-scale', 'value')],
+     Input('selected-object', 'value'), Input('object-scale', 'value'), Input('subdiv-level', 'value')],
     [State('live-graph', 'relayoutData'), State('rotation-mode', 'value'), State('camera-store', 'data')]
 )
 def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles, phase_shift_deg, sound_power_pct,
-                   stl_path, scale_factor,
+                   stl_path, scale_factor, subdiv_level,
                    relayout, mode, camera_data):
     # --- Update active material and parameters ---
     mat_module.ACTIVE_MATERIAL = material_key
@@ -322,6 +346,12 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     mesh.apply_scale(scale_factor or 0.04)
     mesh.vertices -= mesh.centroid
     
+    # --- Apply subdivision for higher integration density ---
+    if subdiv_level and subdiv_level > 0:
+        for _ in range(subdiv_level):
+            v, f = trimesh.remesh.subdivide(mesh.vertices, mesh.faces)
+            mesh = trimesh.Trimesh(vertices=v, faces=f)
+    
     # Apply Standard Euler Sequential Rotations (X -> Y -> Z)
     r_x = trimesh.transformations.rotation_matrix(np.radians(rx), [1, 0, 0])
     r_y = trimesh.transformations.rotation_matrix(np.radians(ry), [0, 1, 0])
@@ -333,6 +363,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
 
     # --- Parse toggles ---
     show_pressure = 'pressure_color' in (field_toggles or [])
+    show_force_map = 'acoustic_force_color' in (field_toggles or [])
     show_gorkov_map = 'gorkov_color' in (field_toggles or [])
     show_velocity = 'velocity_arrows' in (field_toggles or [])
     show_acoustic_force = 'acoustic_arrows' in (field_toggles or [])
@@ -380,7 +411,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     # --- Gravity ---
     total_mass = mesh.volume * mat_info['rho']  # g (in mm/g unit system)
     f_gravity = np.zeros_like(f_acoustic)
-    # The trandducers were mapped to the Z-axis on load, so gravity should pull down -Z
+    # The tranducers were mapped to the Z-axis on load, so gravity should pull down -Z
     # TODO: Make gravity direction dependent on transducer orientation / Fixed
     f_gravity[:, 2] = -(total_mass * 9806.65) / len(a_pts)  # gravity in mm/s^2
 
@@ -395,13 +426,24 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     # --- Build Figure ---
     fig = go.Figure()
 
-    # 1. Mesh — colored by pressure, gorkov, or plain
+    # 1. Mesh — colored by pressure, force, gorkov, or plain
     if show_gorkov_map and gorkov_U is not None:
         fig.add_trace(go.Mesh3d(
             x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
             intensity=gorkov_U, intensitymode='cell',
             colorscale='Portland', colorbar=dict(title='Gorkov U', x=1.0, len=0.5, y=0.75),
+            opacity=1.0, flatshading=True,
+            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
+            name='Acoustic Target',
+        ))
+    elif show_force_map:
+        f_mags = np.linalg.norm(f_acoustic, axis=1)
+        fig.add_trace(go.Mesh3d(
+            x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
+            i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
+            intensity=f_mags, intensitymode='cell',
+            colorscale='Hot', colorbar=dict(title='Local Force (mag)', x=1.0, len=0.5, y=0.75),
             opacity=1.0, flatshading=True,
             lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
             name='Acoustic Target',
@@ -567,6 +609,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     stats_lines.append(html.Div([html.Span("VECTOR: ", style={'color': '#888'}),
                                   f"[{net_v[0]:.2e}, {net_v[1]:.2e}, {net_v[2]:.2e}]"]))
     stats_lines.append(html.Div([html.Span("MAX PRESSURE: ", style={'color': '#888'}), f"{np.max(p_amp):.0f} Pa"]))
+    stats_lines.append(html.Div([html.Span("INTEGRATION PTS: ", style={'color': '#888'}), f"{len(a_pts)}"]))
     stats_lines.append(html.Div([html.Span("MAX VELOCITY: ", style={'color': '#888'}), f"{np.max(v_speed):.2e} mm/s"]))
     
     return fig, [html.Div(stats_lines)]

@@ -50,6 +50,9 @@ OFFSET_LAYERS = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]  # mm from surface along 
 GRID_RESOLUTION = 51       # Points per axis for volumetric field
 GRID_EXTENT = 25.0         # ±mm around object centroid
 
+# Integration Density
+SUBDIVISION_LEVEL = 2       # 0 = original STL, 1 = 4x faces, 2 = 16x faces
+
 
 ##########################################################################################
 # Mesh Loading
@@ -71,9 +74,18 @@ def load_mesh(filepath, scale=1.0):
     mesh.apply_scale(scale)
     mesh.vertices -= mesh.bounding_box.centroid  # Center at origin
 
+    # --- Subdivide for integration density ---
+    if SUBDIVISION_LEVEL > 0:
+        print(f"  Subdividing mesh (Level {SUBDIVISION_LEVEL})...")
+        for _ in range(SUBDIVISION_LEVEL):
+            # trimesh.remesh.subdivide split each triangle into 4
+            v, f = trimesh.remesh.subdivide(mesh.vertices, mesh.faces)
+            mesh = trimesh.Trimesh(vertices=v, faces=f)
+
     print(f"  Faces: {len(mesh.faces)}")
     print(f"  Vertices: {len(mesh.vertices)}")
     print(f"  Volume: {mesh.volume:.4f} mm³")
+    print(f"  Surface Area: {mesh.area:.4f} mm²")
     print(f"  Bounding box: {mesh.bounds[0]} to {mesh.bounds[1]}")
     return mesh
 
@@ -130,20 +142,40 @@ def generate_surface_points(mesh, offsets=None):
 ##########################################################################################
 # Field Computation
 ##########################################################################################
-def compute_shaped_field(points, sources, mesh_volume, phases=None):
+def compute_radiation_force(p_complex, normals, face_areas):
     """
-    Compute the full acoustic field at sample points: pressure, velocity, Gorkov, force.
+    Compute radiation force via surface integration: F = P_rad * A * (-n)
+    
+    P_rad = <p²> / (rho * c²)
     
     Args:
-        points:      (N, 3) sample positions
-        sources:     (M, 3) transducer positions
-        mesh_volume: object volume [mm³]
-        phases:      (M,) transducer phases [rad]
+        p_complex:  (N,) complex pressure at centroids
+        normals:    (N, 3) face normals
+        face_areas: (N,) face areas
         
     Returns:
-        dict with keys:
-            p_complex, p_amplitude, v_vectors, v_speed,
-            gorkov_U, gorkov_force
+        f_vectors: (N, 3) force vector for each face
+        p_rad:     (N,) radiation pressure magnitude [Pa]
+    """
+    med = get_medium()
+    rho = med["rho"]
+    c = med["c"]
+    
+    # Time-averaged pressure squared: <p²> = |P|² / 2
+    p_sq_avg = np.abs(p_complex)**2 / 2.0
+    
+    # Radiation pressure (Pa)
+    p_rad = p_sq_avg / (rho * c**2)
+    
+    # Force = pressure * area * inward_normal
+    f_vectors = p_rad[:, np.newaxis] * (-normals) * face_areas[:, np.newaxis]
+    
+    return f_vectors, p_rad
+
+
+def compute_shaped_field(points, sources, mesh_volume, normals=None, areas=None, phases=None):
+    """
+    Compute the full acoustic field at sample points: pressure, velocity, Gorkov, and Radiation Force.
     """
     f1, f2 = get_contrast_factors()
     N = len(points)
@@ -159,15 +191,22 @@ def compute_shaped_field(points, sources, mesh_volume, phases=None):
     v_vectors, v_speed = compute_velocity_vector(points, sources, phases)
     print(f"    Velocity done in {time.time() - t0:.2f}s")
 
-    print(f"  Computing Gorkov potential...")
+    print(f"  Computing Gorkov potential (Small-Sphere Approx)...")
     t0 = time.time()
     gorkov_U = compute_gorkov_potential(p_complex, v_speed, mesh_volume, f1, f2)
     print(f"    Gorkov potential done in {time.time() - t0:.2f}s")
 
-    print(f"  Computing Gorkov force (F = -∇U)...")
-    t0 = time.time()
-    gorkov_force = compute_gorkov_force(points, sources, mesh_volume, f1, f2, phases)
-    print(f"    Gorkov force done in {time.time() - t0:.2f}s")
+    rad_force = None
+    if normals is not None and areas is not None:
+        print(f"  Computing Surface Integration Radiation Force (F=P*A)...")
+        t0 = time.time()
+        # We only apply this to the surface points (offset=0 layer)
+        M = len(normals)
+        # Note: ShapedAcousticField usually stacks layers. We assume points[:M] corresponds to offset 0 Layer
+        # or we check all_offsets outside. For simplicity, we'll calculate for all points provided
+        # but the caller should ensure these correspond to surface centroids.
+        rad_force, _ = compute_radiation_force(p_complex, normals, areas)
+        print(f"    Radiation force integration done in {time.time() - t0:.2f}s")
 
     return {
         'p_complex': p_complex,
@@ -175,13 +214,19 @@ def compute_shaped_field(points, sources, mesh_volume, phases=None):
         'v_vectors': v_vectors,
         'v_speed': v_speed,
         'gorkov_U': gorkov_U,
-        'gorkov_force': gorkov_force,
+        'rad_force': rad_force,
     }
 
 
 ##########################################################################################
 # Volumetric Field for Cross-Sections
 ##########################################################################################
+
+# Gorkov Potential -> treats object as a sphere (Small-particle approximation)
+# Surface Integration -> Calculates force by integrating radiation pressure (F=P*A)
+# over many small subsections (subdivided triangles) of the object's surface.
+
+
 def compute_volumetric_field(sources, centroid, mesh_volume, phases=None,
                               extent=GRID_EXTENT, resolution=GRID_RESOLUTION):
     """Compute pressure + velocity on a 3D grid centered on the object."""
@@ -231,7 +276,7 @@ def plot_3d_surface_field(mesh, centroids, field_data, sources):
     p_surface = field_data['p_amplitude'][start:end]
     v_surface = np.abs(field_data['v_vectors'][start:end])
     v_speed_surface = field_data['v_speed'][start:end]
-    force_surface = field_data['gorkov_force'][start:end]
+    force_surface = field_data['rad_force'][start:end] if field_data['rad_force'] is not None else np.zeros((N_faces, 3))
 
     fig = go.Figure()
 
@@ -299,7 +344,7 @@ def plot_3d_surface_field(mesh, centroids, field_data, sources):
     fig.add_trace(go.Scatter3d(
         x=fx_lines, y=fy_lines, z=fz_lines,
         mode='lines', line=dict(color='#ff5555', width=3), # Magenta
-        name='Gorkov Force', showlegend=True,
+        name='Radiation Force (P*A)', showlegend=True,
     ))
 
     # 4. Transducer positions
@@ -388,7 +433,7 @@ def export_csv(filepath, points, field_data, offsets):
         v_real,                              # vx, vy, vz
         field_data['v_speed'],               # speed
         field_data['gorkov_U'],              # gorkov_U
-        field_data['gorkov_force'],          # Fx, Fy, Fz
+        field_data['rad_force'] if field_data['rad_force'] is not None else np.zeros((N, 3)),
         offsets,                             # offset layer
     ])
 
@@ -411,20 +456,23 @@ def print_summary(field_data, mesh, offsets):
     p = field_data['p_amplitude'][s:e]
     v = field_data['v_speed'][s:e]
     U = field_data['gorkov_U'][s:e]
-    F = field_data['gorkov_force'][s:e]
+    
+    # Radiation Force Summary
+    F = field_data['rad_force'][s:e] if field_data['rad_force'] is not None else np.zeros((N_faces, 3))
     F_net = np.sum(F, axis=0)
     F_mags = np.linalg.norm(F, axis=1)
 
     print("\n" + "=" * 60)
-    print("  FIELD SUMMARY (on-surface values)")
+    print("  FIELD SUMMARY (Surface Integration Model)")
     print("=" * 60)
     print(f"  Pressure:      min={np.min(p):.1f}  max={np.max(p):.1f}  mean={np.mean(p):.1f} Pa")
     print(f"  Velocity:      min={np.min(v):.2e}  max={np.max(v):.2e}  mean={np.mean(v):.2e} mm/s")
     print(f"  Gorkov U:      min={np.min(U):.4e}  max={np.max(U):.4e}")
-    print(f"  Force |F|:     min={np.min(F_mags):.4e}  max={np.max(F_mags):.4e}")
+    print(f"  Local F|P*A|:  min={np.min(F_mags):.4e}  max={np.max(F_mags):.4e}")
     print(f"  Net Force:     [{F_net[0]:.4e}, {F_net[1]:.4e}, {F_net[2]:.4e}]")
     print(f"  |Net Force|:   {np.linalg.norm(F_net):.4e}")
     print(f"  Object volume: {mesh.volume:.4f} mm³")
+    print(f"  Surface area:  {mesh.area:.4f} mm² ({N_faces} integration elements)")
     print("=" * 60)
 
 
@@ -457,11 +505,20 @@ def main():
     print("\nGenerating surface sample points...")
     all_points, all_normals, all_offsets, centroids, face_areas = \
         generate_surface_points(mesh, OFFSET_LAYERS)
+        
+    # Repeat face areas for each offset layer to maintain array shape
+    face_areas_repeated = np.tile(face_areas, len(OFFSET_LAYERS))
 
     # --- Compute field on surface ---
-    print("\n--- Computing Acoustic Field (Gorkov) ---")
+    print("\n--- Computing Acoustic Field (Surface Integration) ---")
     t_total = time.time()
-    field_data = compute_shaped_field(all_points, sources, mesh.volume)
+    
+    # We pass normals and areas only for the surface sample points
+    # generate_surface_points returns them for the full set, so we need to match them
+    field_data = compute_shaped_field(
+        all_points, sources, mesh.volume, 
+        normals=all_normals, areas=face_areas_repeated
+    )
     print(f"\n  Total surface field computation: {time.time() - t_total:.2f}s")
 
     # --- Summary ---
