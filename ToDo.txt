@@ -1,0 +1,10 @@
+1. [DONE] Add water droplet and explore force effects on that (Selected via Presets)
+2. Continue refining current model that uses non gorkov version
+3. Look into Matrix method in python for acoustic levitation simulations
+4. Look int OSAFT (Open-Source AcoustoFluidics Theories) library 
+        specifically the non Gorkov and later methods
+5. Make tailscale accounst so that we can acces Jareds local Agent???
+6. MCP server???
+7 .Hermes agent
+8. Get agent that does code, another agent that tests??
+    Or one agent that runs, another agent that tests tuning with different params???

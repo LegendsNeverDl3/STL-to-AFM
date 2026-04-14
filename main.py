@@ -6,6 +6,7 @@ import os
 import sys
 import argparse
 import webbrowser
+import dash
 from dash import Dash, dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 from flask_cors import CORS
@@ -45,8 +46,8 @@ def compute_simplified_forces(centroids, normals, face_areas, sources, phases=No
     # acoustic velocity
     v_scalar = p_amplitude / (rho * c)
 
-    # Radiation pressure
-    p_rad = (p_amplitude ** 2) / (rho * c ** 2)
+    # Radiation pressure: <p^2> / (rho * c^2) = |p|^2 / (2 * rho * c^2)
+    p_rad = (p_amplitude ** 2) / (2.0 * rho * c ** 2)
     # force = pressure * area
     f_acoustic = p_rad[:, np.newaxis] * (-normals) * face_areas[:, np.newaxis]
 
@@ -156,7 +157,19 @@ app.layout = dbc.Container([
     dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}}),
     
     dbc.Row([
-        dbc.Col(html.H1("Acoustic Levitation Simulator", className="text-center my-4", style={'color': '#00e0ff', 'fontWeight': '200', 'letterSpacing': '4px'}), width=12)
+        dbc.Col(html.H1("Acoustic Levitation Simulator", className="text-center my-4", style={'color': '#00e0ff', 'fontWeight': '200', 'letterSpacing': '4px'}), width=8),
+        dbc.Col([
+            html.Label("Quick Presets", className="control-label"),
+            dcc.Dropdown(
+                id='quick-presets',
+                options=[
+                    {'label': 'Default (Foam)', 'value': 'foam'},
+                    {'label': 'Water Droplet', 'value': 'droplet'},
+                ],
+                placeholder="Apply Preset...",
+                className="mb-3"
+            ),
+        ], width=4, className="d-flex flex-column justify-content-center")
     ]),
     
     dbc.Row([
@@ -215,6 +228,9 @@ app.layout = dbc.Container([
                             
                             html.Label(["Phase Shift: ", html.Span(id='ps-val', children='0'), "°"], className="control-label", style={'marginTop': '10px'}),
                             dcc.Slider(id='phase-shift', min=0, max=360, step=1, value=0, tooltip={"always_visible": True, "placement": "bottom"}),
+
+                            html.Label(["Shape Deformation (Z-Squash): ", html.Span(id='squash-val', children='1.0')], className="control-label", style={'marginTop': '15px'}),
+                            dcc.Slider(id='z-squash', min=0.3, max=1.2, step=0.05, value=1.0, marks={0.3: 'Flat', 1.0: 'Norm', 1.2: 'Tall'}),
                         ], title="Environment Setup"),
                         
                         # Category 2: Physics Toggles
@@ -275,6 +291,19 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 @app.callback(
+    [Output('selected-object', 'value'), Output('material-preset', 'value'),
+     Output('force-model', 'value'), Output('object-scale', 'value'), Output('z-squash', 'value')],
+    [Input('quick-presets', 'value')],
+    prevent_initial_call=True
+)
+def apply_preset(preset):
+    if preset == 'droplet':
+        return os.path.join('3D_Files', 'Sphere.stl'), 'water_droplet', 'gorkov', 0.04, 0.7
+    elif preset == 'foam':
+        return os.path.join('3D_Files', 'Tetrahedron.stl'), 'polystyrene_foam', 'simplified', 0.04, 1.0
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+@app.callback(
     [Output('pos-x', 'value'), Output('pos-y', 'value'), Output('pos-z', 'value'),
      Output('rot-x', 'value'), Output('rot-y', 'value'), Output('rot-z', 'value'),
      Output('inp-x', 'value'), Output('inp-y', 'value'), Output('inp-z', 'value'),
@@ -313,11 +342,11 @@ def sync_controls(sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, relayout
     return sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, camera_data
 
 @app.callback(
-    [Output('sp-val', 'children'), Output('ps-val', 'children'), Output('subdiv-val', 'children')],
-    [Input('sound-power', 'value'), Input('phase-shift', 'value'), Input('subdiv-level', 'value')]
+    [Output('sp-val', 'children'), Output('ps-val', 'children'), Output('subdiv-val', 'children'), Output('squash-val', 'children')],
+    [Input('sound-power', 'value'), Input('phase-shift', 'value'), Input('subdiv-level', 'value'), Input('z-squash', 'value')]
 )
-def update_slider_labels(sp, ps, sd):
-    return f"{sp}", f"{ps}", f"{sd}"
+def update_slider_labels(sp, ps, sd, sq):
+    return f"{sp}", f"{ps}", f"{sd}", f"{sq:.2f}"
 
 @app.callback(
     [Output('live-graph', 'figure'), Output('stats-target', 'children')],
@@ -325,12 +354,13 @@ def update_slider_labels(sp, ps, sd):
      Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value'),
      Input('force-model', 'value'), Input('material-preset', 'value'),
      Input('field-toggles', 'value'), Input('phase-shift', 'value'), Input('sound-power', 'value'),
-     Input('selected-object', 'value'), Input('object-scale', 'value'), Input('subdiv-level', 'value')],
+     Input('selected-object', 'value'), Input('object-scale', 'value'), Input('subdiv-level', 'value'),
+     Input('z-squash', 'value')],
     [State('live-graph', 'relayoutData'), State('rotation-mode', 'value'), State('camera-store', 'data')]
 )
 def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles, phase_shift_deg, sound_power_pct,
-                   stl_path, scale_factor, subdiv_level,
-                   relayout, mode, camera_data):
+                    stl_path, scale_factor, subdiv_level, z_squash,
+                    relayout, mode, camera_data):
     # --- Update active material and parameters ---
     mat_module.ACTIVE_MATERIAL = material_key
     
@@ -351,6 +381,14 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
         for _ in range(subdiv_level):
             v, f = trimesh.remesh.subdivide(mesh.vertices, mesh.faces)
             mesh = trimesh.Trimesh(vertices=v, faces=f)
+
+    # --- Apply Z-Squash deformation (Oblate Spheroid) ---
+    z_sq = z_squash if z_squash is not None else 1.0
+    if z_sq != 1.0:
+        # Using a transform matrix is the cleanest way in trimesh
+        squash_mat = np.eye(4)
+        squash_mat[2, 2] = z_sq
+        mesh.apply_transform(squash_mat)
     
     # Apply Standard Euler Sequential Rotations (X -> Y -> Z)
     r_x = trimesh.transformations.rotation_matrix(np.radians(rx), [1, 0, 0])
@@ -459,11 +497,15 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
             name='Acoustic Target',
         ))
     else:
+        # Use a deeper blue for water droplets
+        mesh_color = '#0077ff' if material_key == 'water_droplet' else '#00e0ff'
+        mesh_opacity = 0.6 if material_key == 'water_droplet' else 0.3
+        
         fig.add_trace(go.Mesh3d(
             x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-            color='#00e0ff', opacity=0.3, flatshading=True,
-            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
+            color=mesh_color, opacity=mesh_opacity, flatshading=True,
+            lighting=dict(ambient=0.45, diffuse=0.8, specular=1.0, roughness=0.1),
             name='Acoustic Target',
         ))
 
@@ -589,6 +631,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     limit = 50
     fig.update_layout(
         template='plotly_dark',
+        title=f"Simulation: {os.path.basename(stl_path)} | Scale: {scale_factor:.3f} | Z-Squash: {z_sq:.2f}",
         scene={'xaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
                'yaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
                'zaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
@@ -601,6 +644,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     
     # --- Stats panel ---
     stats_lines.append(html.Div([html.Span("MATERIAL: ", style={'color': '#888'}), mat_info['name']]))
+    stats_lines.append(html.Div([html.Span("VOLUME: ", style={'color': '#888'}), f"{mesh.volume:.4f} mm³"]))
     stats_lines.append(html.Div([html.Span("MASS: ", style={'color': '#888'}), f"{total_mass:.4e} g ({total_mass*1000:.2f} mg)"]))
     stats_lines.append(html.Hr(style={'margin': '5px 0'}))
     stats_lines.append(html.Div([html.Span("NET FORCE: ", style={'color': '#888'}), f"{np.linalg.norm(net_v):.4e}"]))
