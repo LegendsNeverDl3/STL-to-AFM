@@ -276,6 +276,7 @@ app.layout = dbc.Container([
                     ], start_collapsed=True, flush=True),
                     
                     html.Hr(style={'borderColor': 'rgba(255,255,255,0.1)'}),
+                    dbc.Button("✨ Find Equilibrium", id='btn-auto-levitate', color="info", className="w-100 mb-3", style={'fontWeight': 'bold'}),
                     html.Div(id='stats-target', className="stats-text")
                 ])
             ], className="control-card")
@@ -302,6 +303,78 @@ def apply_preset(preset):
     elif preset == 'foam':
         return os.path.join('3D_Files', 'Tetrahedron.stl'), 'polystyrene_foam', 'simplified', 0.04, 1.0
     return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+@app.callback(
+    Output('pos-z', 'value', allow_duplicate=True),
+    [Input('btn-auto-levitate', 'n_clicks')],
+    [State('selected-object', 'value'), State('object-scale', 'value'), State('z-squash', 'value'),
+     State('material-preset', 'value'), State('sound-power', 'value'), State('phase-shift', 'value'),
+     State('pos-x', 'value'), State('pos-y', 'value')],
+    prevent_initial_call=True
+)
+def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, phase_deg, x, y):
+    if not n_clicks:
+        return dash.no_update
+    
+    # 1. Prepare physical parameters
+    mat_info = get_material(material_key)
+    power_mult = (power or 100) / 100.0
+    phases = np.zeros(len(SOURCES))
+    phases[SOURCES[:, 2] > 0] = np.radians(phase_deg)
+    
+    # 2. Load mesh and calculate gravity
+    mesh = trimesh.load(stl_path)
+    if isinstance(mesh, trimesh.Scene):
+        meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
+        mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
+    mesh.apply_scale(scale or 0.04)
+    if squash and squash != 1.0:
+        v = mesh.vertices.copy()
+        v[:, 2] *= squash
+        mesh.vertices = v
+    
+    total_mass = mesh.volume * mat_info['rho']
+    gravity_f_z = -(total_mass * 9806.65)
+    
+    # 3. Optimized Sweep (Coarse Sweep + Refined Search)
+    centroids = mesh.triangles_center - mesh.centroid
+    step = max(1, len(centroids) // 200)
+    sub_centroids = centroids[::step]
+    sub_vol = mesh.volume / max(1, len(sub_centroids))
+    f1, f2 = get_contrast_factors(material_key)
+    
+    z_coarse = np.linspace(-30, 30, 61)
+    
+    def get_net_force(z_pos):
+        test_pts = sub_centroids + np.array([x, y, z_pos])
+        f_acoustic = compute_gorkov_force(test_pts, SOURCES, sub_vol, f1, f2, phases)
+        total_acoustic_z = np.sum(f_acoustic[:, 2]) * (power_mult ** 2)
+        return total_acoustic_z + gravity_f_z
+
+    # Coarse sweep
+    coarse_forces = [get_net_force(z) for z in z_coarse]
+    
+    # 4. Find stable crossings
+    stable_z = []
+    for i in range(len(coarse_forces)-1):
+        if coarse_forces[i] > 0 and coarse_forces[i+1] <= 0:
+            # We found a potential trap region! 
+            # Use Bisection to refine this specific 1mm region to high precision
+            low, high = z_coarse[i], z_coarse[i+1]
+            for _ in range(6): # 6 iterations = 2^6 = 64x higher precision
+                mid = (low + high) / 2
+                if get_net_force(mid) > 0:
+                    low = mid
+                else:
+                    high = mid
+            stable_z.append((low + high) / 2)
+    
+    if not stable_z:
+        # If no trap found, maybe increase range or return fallback
+        return 0
+        
+    # Pick the one closest to current Z
+    return float(stable_z[np.argmin(np.abs(stable_z))])
 
 @app.callback(
     [Output('pos-x', 'value'), Output('pos-y', 'value'), Output('pos-z', 'value'),
