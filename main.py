@@ -493,6 +493,7 @@ def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles
     if force_model == 'gorkov':
         # Gorkov evaluates body forces. To map this to surface nodes like Simplified model,
         # we treat each face as a discrete sub-particle containing an equal fraction of the mass/volume.
+        # NOTE: This is not entirely accurate, but it is a good approximation for now. We also are using volume instead of radius
         vol_per_face = mesh.volume / max(1, len(a_pts))
         p_amp, v_speed, v_vectors, gorkov_U, gorkov_force = \
             compute_gorkov_forces(c_pts, SOURCES, vol_per_face, phases=phases)

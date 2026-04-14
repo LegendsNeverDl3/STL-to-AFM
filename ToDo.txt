@@ -3,6 +3,20 @@
 3. Look into Matrix method in python for acoustic levitation simulations
 4. Look int OSAFT (Open-Source AcoustoFluidics Theories) library 
         specifically the non Gorkov and later methods
+
+        NOTE THAT I can use OSAFT for water droplet modeling
+6. Look into combinding 2 droplets acoustic streams is applicable
+5. Look into streamms for the acoustic stream
+        Note that dropelet when combined can exceed wavelength, also if you harden a liquid what happens
+        Also map how water droplets combine with weird movement(will need time based component)
+
+
+
+
+
+
+
+
 5. Make tailscale accounst so that we can acces Jareds local Agent???
 6. MCP server???
 7 .Hermes agent
