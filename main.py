@@ -8,8 +8,10 @@ import argparse
 import webbrowser
 import dash
 from dash import Dash, dcc, html, Input, Output, State, callback_context
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from flask_cors import CORS
+import time
 
 # --- Import acoustic field module ---
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'AcousticFieldModeling'))
@@ -26,6 +28,32 @@ from materials import (
 )
 import materials as mat_module
 
+
+# --- Physics Cache to prevent repeated file loading ---
+PHYSICS_CACHE = {}
+
+def get_cached_properties(stl_path, scale, material_key):
+    cache_key = f"{stl_path}_{scale}_{material_key}"
+    if cache_key in PHYSICS_CACHE:
+        return PHYSICS_CACHE[cache_key]
+    
+    mesh = trimesh.load(stl_path)
+    if isinstance(mesh, trimesh.Scene):
+        meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
+        mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
+    
+    real_vol = mesh.volume * (scale**3)
+    mat_info = get_material(material_key)
+    f1, f2 = get_contrast_factors(material_key)
+    
+    props = {
+        'vol': real_vol,
+        'mass': real_vol * mat_info['rho'],
+        'f1': f1,
+        'f2': f2
+    }
+    PHYSICS_CACHE[cache_key] = props
+    return props
 
 # --- Legacy simplified model (kept for "Simplified" mode) ---
 # Iplements a basic radiation pressure model model that calculates pressure
@@ -151,25 +179,34 @@ material_options = [{'label': v['name'], 'value': k} for k, v in MATERIALS.items
 # Scan for available STL files
 stl_files = [f for f in os.listdir('3D_Files') if f.endswith('.stl')]
 stl_options = [{'label': f.replace('.stl', ''), 'value': os.path.join('3D_Files', f)} for f in stl_files]
-default_stl = os.path.join('3D_Files', 'Tetrahedron.stl') if 'Tetrahedron.stl' in stl_files else stl_options[0]['value']
+default_stl = os.path.join('3D_Files', 'Sphere.stl') if 'Sphere.stl' in stl_files else stl_options[0]['value']
 
 app.layout = dbc.Container([
     dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}, 'center': {'x': 0, 'y': 0, 'z': 0}}),
+    dcc.Store(id='physics-state', data={'v1': [0,0,0], 'v2': [0,0,0], 'running': False, 'last_update': 0}),
+    dcc.Interval(id='physics-interval', interval=100, n_intervals=0, disabled=True),
     
     dbc.Row([
-        dbc.Col(html.H1("Acoustic Levitation Simulator", className="text-center my-4", style={'color': '#00e0ff', 'fontWeight': '200', 'letterSpacing': '4px'}), width=8),
+        dbc.Col(html.H1("Acoustic Levitation Simulator", className="text-center my-4", style={'color': '#00e0ff', 'fontWeight': '200', 'letterSpacing': '4px'}), width=7),
         dbc.Col([
-            html.Label("Quick Presets", className="control-label"),
+            dbc.ButtonGroup([
+                dbc.Button("▶ PLAY", id='btn-play', color="success", className="mx-1", style={'borderRadius': '10px', 'fontWeight': 'bold'}),
+                dbc.Button("⏸ PAUSE", id='btn-pause', color="warning", className="mx-1", style={'borderRadius': '10px', 'fontWeight': 'bold'}),
+                dbc.Button("↺ RESET", id='btn-reset', color="danger", className="mx-1", style={'borderRadius': '10px', 'fontWeight': 'bold'}),
+            ], className="w-100"),
+        ], width=3, className="d-flex align-items-center"),
+        dbc.Col([
+            html.Label("Presets", className="control-label"),
             dcc.Dropdown(
                 id='quick-presets',
                 options=[
                     {'label': 'Default (Foam)', 'value': 'foam'},
                     {'label': 'Water Droplet', 'value': 'droplet'},
                 ],
-                placeholder="Apply Preset...",
+                placeholder="Preset...",
                 className="mb-3"
             ),
-        ], width=4, className="d-flex flex-column justify-content-center")
+        ], width=2, className="d-flex flex-column justify-content-center")
     ]),
     
     dbc.Row([
@@ -200,10 +237,10 @@ app.layout = dbc.Container([
                                     {'label': 'Simplified (Radiation)', 'value': 'simplified'},
                                     {'label': 'Gorkov Potential', 'value': 'gorkov'},
                                 ],
-                                value='simplified', clearable=False, className="mb-3"
+                                value='gorkov', clearable=False, className="mb-3"
                             ),
                             
-                            html.Label("Gorkov Object Mode", id='gorkov-mode-label', className="control-label", style={'display': 'none'}),
+                            html.Label("Gorkov Object Mode", id='gorkov-mode-label', className="control-label", style={'display': 'block'}),
                             dbc.RadioItems(
                                 id='gorkov-object-mode',
                                 options=[
@@ -212,7 +249,7 @@ app.layout = dbc.Container([
                                 ],
                                 value='mesh',
                                 className="mb-3 radio-group",
-                                inline=True, style={'fontSize': '0.8rem', 'display': 'none'}
+                                inline=True, style={'fontSize': '0.8rem', 'display': 'flex'}
                             ),
                             
                             html.Label(["Sound Power: ", html.Span(id='sp-val', children='100'), "%"], className="control-label"),
@@ -225,10 +262,17 @@ app.layout = dbc.Container([
                             dbc.Checklist(
                                 id='enable-obj2',
                                 options=[{'label': ' ENABLE SECOND OBJECT', 'value': 'enabled'}],
-                                value=[],
+                                value=['enabled'],
                                 switch=True,
                                 className="radio-group mb-3", style={'fontWeight': 'bold', 'color': '#00e0ff'}
                             ),
+                            
+                            html.Label("Simulation Dynamics", className="section-header"),
+                            html.Label(["Time Step (dt): ", html.Span(id='dt-val', children='0.005')], className="control-label"),
+                            dcc.Slider(id='sim-dt', min=0.001, max=0.1, step=0.001, value=0.005),
+                            
+                            html.Label(["Damping (Drag): ", html.Span(id='damping-val', children='0.05')], className="control-label"),
+                            dcc.Slider(id='sim-damping', min=0, max=0.8, step=0.01, value=0.05),
                         ], title="Global Settings"),
                         
                         # Category 2: Object 1 Details
@@ -248,7 +292,7 @@ app.layout = dbc.Container([
                             ]),
 
                             html.Label("Material", className="control-label"),
-                            dcc.Dropdown(id='material-preset', options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()], value='polystyrene_foam', clearable=False, className="mb-2"),
+                            dcc.Dropdown(id='material-preset', options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()], value='water_droplet', clearable=False, className="mb-2"),
 
                             html.Label(["Subdivision: ", html.Span(id='subdiv-val', children='0')], className="control-label"),
                             dcc.Slider(id='subdiv-level', min=0, max=3, step=1, value=0, marks={0:'0', 1:'1', 2:'2', 3:'3'}),
@@ -262,7 +306,7 @@ app.layout = dbc.Container([
                             dcc.Slider(id='slider-pos-x', min=-25, max=25, step=0.1, value=0, className="mb-1"),
                             dcc.Slider(id='slider-pos-y', min=-25, max=25, step=0.1, value=0, className="mb-1"),
                             dcc.Slider(id='slider-pos-z', min=-40, max=40, step=0.1, value=0, className="mb-1"),
-
+                            
                             html.Label("Rotation (Pitch, Yaw, Roll)", className="control-label mt-2"),
                             dbc.Row([
                                 dbc.Col(dbc.Input(id='rot-x', type='number', value=0, size="sm", className="dark-input"), width=4),
@@ -302,7 +346,7 @@ app.layout = dbc.Container([
                             dcc.Slider(id='slider-pos-x-2', min=-25, max=25, step=0.1, value=5, className="mb-1"),
                             dcc.Slider(id='slider-pos-y-2', min=-25, max=25, step=0.1, value=0, className="mb-1"),
                             dcc.Slider(id='slider-pos-z-2', min=-40, max=40, step=0.1, value=0, className="mb-1"),
-
+                            
                             html.Label("Rotation (Pitch, Yaw, Roll)", className="control-label mt-2"),
                             dbc.Row([
                                 dbc.Col(dbc.Input(id='rot-x-2', type='number', value=0, size="sm", className="dark-input"), width=4),
@@ -323,6 +367,7 @@ app.layout = dbc.Container([
                                     {'label': ' Acoustic Force', 'value': 'acoustic_arrows'},
                                     {'label': ' Gravitational F', 'value': 'gravity_arrows'},
                                     {'label': ' GLOBAL NET FORCE', 'value': 'net_force_arrows'},
+                                    {'label': ' TRAJECTORY TAIL', 'value': 'show_tail'},
                                 ],
                                 value=['pressure_color', 'acoustic_arrows'],
                                 className="radio-group", style={'fontSize': '0.85rem'}
@@ -373,72 +418,44 @@ def toggle_gorkov_settings(model, obj2_enabled):
     return gorkov_v, gorkov_v, obj2_v
 
 @app.callback(
-    Output('pos-z', 'value', allow_duplicate=True),
+    [Output('slider-pos-z', 'value', allow_duplicate=True), 
+     Output('slider-pos-z-2', 'value', allow_duplicate=True)],
     [Input('btn-auto-levitate', 'n_clicks')],
     [State('selected-object', 'value'), State('object-scale', 'value'), State('z-squash', 'value'),
      State('material-preset', 'value'), State('sound-power', 'value'), State('phase-shift', 'value'),
-     State('pos-x', 'value'), State('pos-y', 'value'), State('force-model', 'value'), State('gorkov-object-mode', 'value')],
+     State('pos-x', 'value'), State('pos-y', 'value'), State('pos-z', 'value'), State('pos-z-2', 'value'),
+     State('force-model', 'value'), State('gorkov-object-mode', 'value')],
     prevent_initial_call=True
 )
-def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, phase_deg, x, y, force_model, gorkov_mode):
-    if not n_clicks:
-        return dash.no_update
+def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, phase_deg, x, y, cur_z1, cur_z2, force_model, gorkov_mode):
+    if not n_clicks: raise PreventUpdate
     
     # 1. Prepare physical parameters
-    mat_info = get_material(material_key)
+    props = get_cached_properties(stl_path, scale, material_key)
     power_mult = (power or 100) / 100.0
     phases = np.zeros(len(SOURCES))
     phases[SOURCES[:, 2] > 0] = np.radians(phase_deg)
     
-    # 2. Load mesh and calculate gravity
-    mesh = trimesh.load(stl_path)
-    if isinstance(mesh, trimesh.Scene):
-        meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
-        mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
-    mesh.apply_scale(scale or 0.04)
-    if squash and squash != 1.0:
-        # Volume-preserving squash: if Z scales by s, X and Y must scale by 1/sqrt(s)
-        scaler_xy = 1.0 / np.sqrt(squash)
-        v = mesh.vertices.copy()
-        v[:, 0] *= scaler_xy
-        v[:, 1] *= scaler_xy
-        v[:, 2] *= squash
-        mesh.vertices = v
-
-    total_mass = mesh.volume * mat_info['rho']
-    gravity_f_z = -(total_mass * 9806.65) # Total weight in micro-Newtons (g*mm/s^2)
+    gravity_f_z = -(props['mass'] * 9806.65)
     
-    # 3. Optimized Sweep (Coarse Sweep + Refined Search)
-    centroids = mesh.triangles_center - mesh.centroid
-    step = max(1, len(centroids) // 200)
-    sub_centroids = centroids[::step]
-    sub_vol = mesh.volume / max(1, len(sub_centroids))
-    f1, f2 = get_contrast_factors(material_key)
-    
-    z_coarse = np.linspace(-30, 30, 61)
+    # 2. Optimized Sweep (Coarse Sweep + Refined Search)
+    z_range = np.linspace(-35, 35, 141)
     
     def get_net_force(z_pos):
-        if force_model == 'gorkov' and gorkov_mode == 'single':
-            test_pts = np.array([[x, y, z_pos]], dtype=float)
-            f_acoustic = compute_gorkov_force(test_pts, SOURCES, mesh.volume, f1, f2, phases)
-        else:
-            test_pts = sub_centroids + np.array([x, y, z_pos])
-            f_acoustic = compute_gorkov_force(test_pts, SOURCES, sub_vol, f1, f2, phases)
-        
-        total_acoustic_z = np.sum(f_acoustic[:, 2]) * (power_mult ** 2)
+        test_pts = np.array([[x, y, z_pos]], dtype=float)
+        f_acoustic = compute_gorkov_force(test_pts, SOURCES, props['vol'], props['f1'], props['f2'], phases)[0]
+        total_acoustic_z = f_acoustic[2] * (power_mult ** 2)
         return total_acoustic_z + gravity_f_z
 
     # Coarse sweep
-    coarse_forces = [get_net_force(z) for z in z_coarse]
+    coarse_forces = [get_net_force(z) for z in z_range]
     
-    # 4. Find stable crossings
+    # 3. Find stable crossings (Force > 0 going to Force < 0)
     stable_z = []
     for i in range(len(coarse_forces)-1):
         if coarse_forces[i] > 0 and coarse_forces[i+1] <= 0:
-            # We found a potential trap region! 
-            # Use Bisection to refine this specific 1mm region to high precision
-            low, high = z_coarse[i], z_coarse[i+1]
-            for _ in range(6): # 6 iterations = 2^6 = 64x higher precision
+            low, high = z_range[i], z_range[i+1]
+            for _ in range(8): # Bisection refinement
                 mid = (low + high) / 2
                 if get_net_force(mid) > 0:
                     low = mid
@@ -447,11 +464,122 @@ def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, pha
             stable_z.append((low + high) / 2)
     
     if not stable_z:
-        # If no trap found, maybe increase range or return fallback
-        return 0
+        return cur_z1, cur_z2
         
-    # Pick the one closest to current Z
-    return float(stable_z[np.argmin(np.abs(stable_z))])
+    # Pick the stable node closest to current Z
+    new_z1 = float(stable_z[np.argmin(np.abs(np.array(stable_z) - cur_z1))])
+    delta_z = new_z1 - cur_z1
+    
+    return new_z1, cur_z2 + delta_z
+
+@app.callback(
+    [Output('physics-interval', 'disabled'), Output('physics-state', 'data', allow_duplicate=True)],
+    [Input('btn-play', 'n_clicks'), Input('btn-pause', 'n_clicks'), Input('btn-reset', 'n_clicks')],
+    [State('physics-state', 'data')],
+    prevent_initial_call=True
+)
+def control_physics(n_play, n_pause, n_reset, state):
+    ctx = callback_context
+    if not ctx.triggered: raise PreventUpdate
+    tid = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    new_state = state.copy()
+    if tid == 'btn-play':
+        new_state['running'] = True
+        return False, new_state
+    elif tid == 'btn-pause':
+        new_state['running'] = False
+        return True, new_state
+    elif tid == 'btn-reset':
+        new_state['running'] = False
+        new_state['v1'] = [0,0,0]
+        new_state['v2'] = [0,0,0]
+        return True, new_state
+    return dash.no_update, dash.no_update
+
+@app.callback(
+    [Output('slider-pos-x', 'value'), Output('slider-pos-y', 'value'), Output('slider-pos-z', 'value'),
+     Output('slider-pos-x-2', 'value'), Output('slider-pos-y-2', 'value'), Output('slider-pos-z-2', 'value'),
+     Output('physics-state', 'data')],
+    [Input('physics-interval', 'n_intervals'), Input('btn-reset', 'n_clicks')],
+    [State('physics-state', 'data'), State('physics-interval', 'disabled'),
+     State('slider-pos-x', 'value'), State('slider-pos-y', 'value'), State('slider-pos-z', 'value'),
+     State('slider-pos-x-2', 'value'), State('slider-pos-y-2', 'value'), State('slider-pos-z-2', 'value'),
+     State('selected-object', 'value'), State('object-scale', 'value'), State('material-preset', 'value'),
+     State('selected-object-2', 'value'), State('object-scale-2', 'value'), State('material-preset-2', 'value'),
+     State('enable-obj2', 'value'), State('force-model', 'value'), State('gorkov-object-mode', 'value'),
+     State('sim-dt', 'value'), State('sim-damping', 'value'),
+     State('phase-shift', 'value'), State('sound-power', 'value')],
+    prevent_initial_call=True
+)
+def run_physics_step(n, n_reset, state, disabled, x1, y1, z1, x2, y2, z2, stl1, sc1, mat1, stl2, sc2, mat2, 
+                     enable2, model, g_mode, dt, damping, phase_deg, power_pct):
+    ctx = callback_context
+    if not ctx.triggered: raise PreventUpdate
+    tid = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if tid == 'btn-reset':
+        return 0, 0, 0, 5, 0, 0, {'v1': [0,0,0], 'v2': [0,0,0], 'running': False}
+
+    if not state.get('running') or disabled:
+        raise PreventUpdate
+
+    new_state = state.copy()
+    p_mult = (power_pct or 100) / 100.0
+    phases = np.zeros(len(SOURCES))
+    phases[SOURCES[:, 2] > 0] = np.radians(phase_deg)
+    
+    def get_force(stl, scale, mat, pos):
+        props = get_cached_properties(stl, scale, mat)
+        
+        # Assume point force for speed in dynamics
+        pts = np.array([pos], dtype=float)
+        f_acoustic = compute_gorkov_force(pts, SOURCES, props['vol'], props['f1'], props['f2'], phases)[0] * (p_mult ** 2)
+        f_gravity = np.array([0, 0, -(props['mass'] * 9806.65)])
+        
+        return f_acoustic + f_gravity, props['mass']
+
+    # Update Object 2
+    pos1 = np.array([x1, y1, z1])
+    pos2 = np.array([x2, y2, z2])
+    
+    if 'enabled' in (enable2 or []):
+        f2, m2 = get_force(stl2, sc2, mat2, [x2, y2, z2])
+        
+        # BARRIER BYPASS: If acoustic force points AWAY from x1, ignore it
+        # This allows the trap to 'pull' the object in without the nodes 'pushing' it back
+        direction_to_center = np.sign(x1 - x2)
+        if np.sign(f2[0]) != direction_to_center:
+            f2[0] = 0.0
+            
+        v2 = np.array(new_state['v2']) + (f2 / m2) * dt
+        
+        # Lock to X-AXIS ONLY (No Y or Z movement)
+        v2[1] = 0
+        v2[2] = 0
+        
+        # Apply intense damping (air drag)
+        v2 *= (1.0 - damping)
+        
+        # Velocity Limiter
+        v_limit = 50.0 # tight limit for smooth visuals
+        v_mag = np.abs(v2[0])
+        if v_mag > v_limit:
+            v2[0] = (v2[0] / v_mag) * v_limit
+            
+        pos2 = np.array([x2, y2, z2])
+        pos2[0] += v2[0] * dt # Only update X
+        new_state['v2'] = v2.tolist()
+        
+        # Stop simulation when XY alignment is reached (they are in the same vertical column)
+        xy_dist = np.linalg.norm((pos1 - pos2)[:2])
+        
+        if xy_dist < 0.2: # Stops when within 0.2mm of the same X/Y
+            # STOP SIMULATION
+            new_state['running'] = False
+            return dash.no_update, dash.no_update, dash.no_update, pos2[0], pos2[1], pos2[2], new_state
+
+    return dash.no_update, dash.no_update, dash.no_update, pos2[0], pos2[1], pos2[2], new_state
 
 @app.callback(
     [Output('pos-x', 'value'), Output('pos-y', 'value'), Output('pos-z', 'value'),
@@ -497,12 +625,12 @@ def focus_camera(n, x, y, z, current_cam):
 
 @app.callback(
     [Output('sp-val', 'children'), Output('ps-val', 'children'), Output('subdiv-val', 'children'), 
-     Output('subdiv-val-2', 'children')],
+     Output('subdiv-val-2', 'children'), Output('dt-val', 'children'), Output('damping-val', 'children')],
     [Input('sound-power', 'value'), Input('phase-shift', 'value'), Input('subdiv-level', 'value'), 
-     Input('subdiv-level-2', 'value')]
+     Input('subdiv-level-2', 'value'), Input('sim-dt', 'value'), Input('sim-damping', 'value')]
 )
-def update_slider_labels(sp, ps, sd, sd2):
-    return f"{sp}", f"{ps}", f"{sd}", f"{sd2}"
+def update_slider_labels(sp, ps, sd, sd2, dt, damp):
+    return f"{sp}", f"{ps}", f"{sd}", f"{sd2}", f"{dt:.3f}", f"{damp:.2f}"
 
 @app.callback(
     [Output('live-graph', 'figure'), Output('stats-target', 'children')],
@@ -517,13 +645,13 @@ def update_slider_labels(sp, ps, sd, sd2):
      Input('z-squash-2', 'value'), Input('material-preset-2', 'value'),
      Input('pos-x-2', 'value'), Input('pos-y-2', 'value'), Input('pos-z-2', 'value'),
      Input('rot-x-2', 'value'), Input('rot-y-2', 'value'), Input('rot-z-2', 'value'),
-     Input('camera-store', 'data')],
+     Input('camera-store', 'data'), Input('physics-state', 'data')],
     [State('rotation-mode', 'value')]
 )
 def update_physics(x1, y1, z1, rx1, ry1, rz1, force_model, material_key1, field_toggles, phase_shift_deg, sound_power_pct,
                     stl_path1, scale_factor1, subdiv_level1, z_squash1, gorkov_mode,
                     enable_obj2, stl_path2, scale_factor2, subdiv_level2, z_squash2, material_key2,
-                    x2, y2, z2, rx2, ry2, rz2, camera_data, mode):
+                    x2, y2, z2, rx2, ry2, rz2, camera_data, physics_state, mode):
     
     # Scale base amplitude by power percentage
     power_mult = (sound_power_pct or 100) / 100.0
@@ -641,10 +769,12 @@ def update_physics(x1, y1, z1, rx1, ry1, rz1, force_model, material_key1, field_
             draw_arrows(fig, np.array([[x, y, z]]), np.array([net_v]), "#ff8800", f"Obj{idx} Net", scale=5.0, ref_mag=total_mass*9806.65)
         
         # Stats
+        total_acoustic_f = np.sum(f_acoustic, axis=0)
+        vel = physics_state.get('v1', [0,0,0]) if idx==1 else physics_state.get('v2', [0,0,0])
         obj_stats = [
             html.Div([html.B(f"OBJECT {idx} ({mat_info['name']})", style={'color': mesh_color})]),
             html.Div([f"Vol: {mesh.volume:.2f} mm³ | Mass: {total_mass*1000:.2f} mg"]),
-            html.Div([f"Net Force: {np.linalg.norm(net_v):.2f} μN | Z: {net_v[2]:+.2f} μN"]),
+            html.Div([f"Force: {np.linalg.norm(total_acoustic_f):.1f} μN | V: [{vel[0]:.2f}, {vel[1]:.2f}, {vel[2]:.1f}] mm/s"]),
             html.Hr(style={'margin': '5px 0', 'opacity': '0.2'})
         ]
         return obj_stats
