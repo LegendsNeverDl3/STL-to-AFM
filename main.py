@@ -154,7 +154,7 @@ stl_options = [{'label': f.replace('.stl', ''), 'value': os.path.join('3D_Files'
 default_stl = os.path.join('3D_Files', 'Tetrahedron.stl') if 'Tetrahedron.stl' in stl_files else stl_options[0]['value']
 
 app.layout = dbc.Container([
-    dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}}),
+    dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}, 'center': {'x': 0, 'y': 0, 'z': 0}}),
     
     dbc.Row([
         dbc.Col(html.H1("Acoustic Levitation Simulator", className="text-center my-4", style={'color': '#00e0ff', 'fontWeight': '200', 'letterSpacing': '4px'}), width=8),
@@ -179,7 +179,7 @@ app.layout = dbc.Container([
                 dbc.CardHeader("CONTROLS"),
                 dbc.CardBody([
                     dbc.Accordion([
-                        # Category 1: Environment Setup
+                        # Category 1: Global Settings
                         dbc.AccordionItem([
                             html.Label("Interaction Mode", className="control-label"),
                             dbc.RadioItems(
@@ -203,37 +203,115 @@ app.layout = dbc.Container([
                                 value='simplified', clearable=False, className="mb-3"
                             ),
                             
-                            html.Label("3D Object", className="control-label"),
-                            dcc.Dropdown(
-                                id='selected-object',
-                                options=stl_options,
-                                value=default_stl, clearable=False, className="mb-3"
+                            html.Label("Gorkov Object Mode", id='gorkov-mode-label', className="control-label", style={'display': 'none'}),
+                            dbc.RadioItems(
+                                id='gorkov-object-mode',
+                                options=[
+                                    {'label': 'Single Point', 'value': 'single'},
+                                    {'label': 'Integrate Mesh', 'value': 'mesh'}
+                                ],
+                                value='mesh',
+                                className="mb-3 radio-group",
+                                inline=True, style={'fontSize': '0.8rem', 'display': 'none'}
                             ),
                             
-                            html.Label("Object Scale", className="control-label"),
-                            dbc.Input(id='object-scale', type='number', value=0.04, step=0.001, className="mb-3 dark-input"),
-
-                            html.Label("Object Material", className="control-label"),
-                            dcc.Dropdown(
-                                id='material-preset',
-                                options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()],
-                                value='polystyrene_foam', clearable=False, className="mb-3"
-                            ),
-
-                            html.Label(["Mesh subdivision: ", html.Span(id='subdiv-val', children='0')], className="control-label"),
-                            dcc.Slider(id='subdiv-level', min=0, max=3, step=1, value=0, marks={0:'Raw', 1:'Low', 2:'Mid', 3:'High'}),
-                            
-                            html.Label(["Sound Power: ", html.Span(id='sp-val', children='100'), "%"], className="control-label", style={'marginTop': '15px'}),
+                            html.Label(["Sound Power: ", html.Span(id='sp-val', children='100'), "%"], className="control-label"),
                             dcc.Slider(id='sound-power', min=1, max=100, step=1, value=100, tooltip={"always_visible": True, "placement": "bottom"}),
                             
-                            html.Label(["Phase Shift: ", html.Span(id='ps-val', children='0'), "°"], className="control-label", style={'marginTop': '10px'}),
+                            html.Label(["Phase Shift: ", html.Span(id='ps-val', children='0'), "°"], className="control-label"),
                             dcc.Slider(id='phase-shift', min=0, max=360, step=1, value=0, tooltip={"always_visible": True, "placement": "bottom"}),
 
-                            html.Label(["Shape Deformation (Z-Squash): ", html.Span(id='squash-val', children='1.0')], className="control-label", style={'marginTop': '15px'}),
-                            dcc.Slider(id='z-squash', min=0.3, max=1.2, step=0.05, value=1.0, marks={0.3: 'Flat', 1.0: 'Norm', 1.2: 'Tall'}),
-                        ], title="Environment Setup"),
+                            html.Hr(style={'borderColor': 'rgba(255,255,255,0.05)'}),
+                            dbc.Checklist(
+                                id='enable-obj2',
+                                options=[{'label': ' ENABLE SECOND OBJECT', 'value': 'enabled'}],
+                                value=[],
+                                switch=True,
+                                className="radio-group mb-3", style={'fontWeight': 'bold', 'color': '#00e0ff'}
+                            ),
+                        ], title="Global Settings"),
                         
-                        # Category 2: Physics Toggles
+                        # Category 2: Object 1 Details
+                        dbc.AccordionItem([
+                            html.Label("3D Object", className="control-label"),
+                            dcc.Dropdown(id='selected-object', options=stl_options, value=default_stl, clearable=False, className="mb-2"),
+                            
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Scale", className="control-label"),
+                                    dbc.Input(id='object-scale', type='number', value=0.04, step=0.001, className="dark-input mb-2"),
+                                ], width=6),
+                                dbc.Col([
+                                    html.Label("Z-Squash", className="control-label"),
+                                    dbc.Input(id='z-squash', type='number', value=1.0, step=0.05, className="dark-input mb-2"),
+                                ], width=6),
+                            ]),
+
+                            html.Label("Material", className="control-label"),
+                            dcc.Dropdown(id='material-preset', options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()], value='polystyrene_foam', clearable=False, className="mb-2"),
+
+                            html.Label(["Subdivision: ", html.Span(id='subdiv-val', children='0')], className="control-label"),
+                            dcc.Slider(id='subdiv-level', min=0, max=3, step=1, value=0, marks={0:'0', 1:'1', 2:'2', 3:'3'}),
+                            
+                            html.Label("Translational Position (X, Y, Z)", className="control-label mt-2"),
+                            dbc.Row([
+                                dbc.Col(dbc.Input(id='pos-x', type='number', value=0, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='pos-y', type='number', value=0, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='pos-z', type='number', value=0, size="sm", className="dark-input"), width=4),
+                            ], className="mb-2"),
+                            dcc.Slider(id='slider-pos-x', min=-25, max=25, step=0.1, value=0, className="mb-1"),
+                            dcc.Slider(id='slider-pos-y', min=-25, max=25, step=0.1, value=0, className="mb-1"),
+                            dcc.Slider(id='slider-pos-z', min=-40, max=40, step=0.1, value=0, className="mb-1"),
+
+                            html.Label("Rotation (Pitch, Yaw, Roll)", className="control-label mt-2"),
+                            dbc.Row([
+                                dbc.Col(dbc.Input(id='rot-x', type='number', value=0, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='rot-y', type='number', value=0, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='rot-z', type='number', value=0, size="sm", className="dark-input"), width=4),
+                            ], className="mb-2"),
+                        ], title="Object 1 (Primary)"),
+
+                        # Category 3: Object 2 Details
+                        dbc.AccordionItem([
+                            html.Label("3D Object", className="control-label"),
+                            dcc.Dropdown(id='selected-object-2', options=stl_options, value=os.path.join('3D_Files', 'Sphere.stl') if 'Sphere.stl' in stl_files else stl_options[0]['value'], clearable=False, className="mb-2"),
+                            
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Scale", className="control-label"),
+                                    dbc.Input(id='object-scale-2', type='number', value=0.04, step=0.001, className="dark-input mb-2"),
+                                ], width=6),
+                                dbc.Col([
+                                    html.Label("Z-Squash", className="control-label"),
+                                    dbc.Input(id='z-squash-2', type='number', value=1.0, step=0.05, className="dark-input mb-2"),
+                                ], width=6),
+                            ]),
+
+                            html.Label("Material", className="control-label"),
+                            dcc.Dropdown(id='material-preset-2', options=[{'label': m['name'], 'value': k} for k, m in MATERIALS.items()], value='water_droplet', clearable=False, className="mb-2"),
+
+                            html.Label(["Subdivision: ", html.Span(id='subdiv-val-2', children='0')], className="control-label"),
+                            dcc.Slider(id='subdiv-level-2', min=0, max=3, step=1, value=0, marks={0:'0', 1:'1', 2:'2', 3:'3'}),
+                            
+                            html.Label("Translational Position (X, Y, Z)", className="control-label mt-2"),
+                            dbc.Row([
+                                dbc.Col(dbc.Input(id='pos-x-2', type='number', value=5, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='pos-y-2', type='number', value=0, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='pos-z-2', type='number', value=0, size="sm", className="dark-input"), width=4),
+                            ], className="mb-2"),
+                            dcc.Slider(id='slider-pos-x-2', min=-25, max=25, step=0.1, value=5, className="mb-1"),
+                            dcc.Slider(id='slider-pos-y-2', min=-25, max=25, step=0.1, value=0, className="mb-1"),
+                            dcc.Slider(id='slider-pos-z-2', min=-40, max=40, step=0.1, value=0, className="mb-1"),
+
+                            html.Label("Rotation (Pitch, Yaw, Roll)", className="control-label mt-2"),
+                            dbc.Row([
+                                dbc.Col(dbc.Input(id='rot-x-2', type='number', value=0, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='rot-y-2', type='number', value=0, size="sm", className="dark-input"), width=4),
+                                dbc.Col(dbc.Input(id='rot-z-2', type='number', value=0, size="sm", className="dark-input"), width=4),
+                            ], className="mb-2"),
+                        ], title="Object 2 (Secondary)", id='obj2-accordion-item', style={'display': 'none'}),
+
+                        # Category 4: Physics Visualization
                         dbc.AccordionItem([
                             dbc.Checklist(
                                 id='field-toggles',
@@ -250,33 +328,13 @@ app.layout = dbc.Container([
                                 className="radio-group", style={'fontSize': '0.85rem'}
                             ),
                         ], title="Physics Visualization"),
-                        
-                        # Category 3: Translation (6-DOF)
-                        dbc.AccordionItem([
-                            *[html.Div([
-                                dbc.Row([
-                                    dbc.Col(html.Label(f"{axis}", className="control-label"), width=6),
-                                    dbc.Col(dbc.Input(id=f'inp-{axis.lower()}', type='number', value=0, size="sm", className="dark-input"), width=6)
-                                ]),
-                                dcc.Slider(id=f'pos-{axis.lower()}', min=-40 if axis=='Z' else -25, max=40 if axis=='Z' else 25, 
-                                           step=0.1, value=0)
-                            ], className="mb-3") for axis in ['X', 'Y', 'Z']],
-                        ], title="Object Translation"),
-                        
-                        # Category 4: Rotation (6-DOF)
-                        dbc.AccordionItem([
-                            *[html.Div([
-                                dbc.Row([
-                                    dbc.Col(html.Label(f"{label}", className="control-label"), width=6),
-                                    dbc.Col(dbc.Input(id=f'inp-r{axis}', type='number', value=0, size="sm", className="dark-input"), width=6)
-                                ]),
-                                dcc.Slider(id=f'rot-{axis}', min=0, max=360, step=1, value=0)
-                            ], className="mb-3") for axis, label in zip(['x', 'y', 'z'], ['Pitch (X)', 'Yaw (Y)', 'Roll (Z)'])]
-                        ], title="Object Rotation"),
                     ], start_collapsed=True, flush=True),
                     
                     html.Hr(style={'borderColor': 'rgba(255,255,255,0.1)'}),
-                    dbc.Button("✨ Find Equilibrium", id='btn-auto-levitate', color="info", className="w-100 mb-3", style={'fontWeight': 'bold'}),
+                    dbc.ButtonGroup([
+                        dbc.Button(" Find Equilibrium", id='btn-auto-levitate', color="info", style={'fontWeight': 'bold'}),
+                        dbc.Button(" Focus Camera", id='btn-focus-camera', color="secondary", style={'fontWeight': 'bold'}),
+                    ], className="w-100 mb-3"),
                     html.Div(id='stats-target', className="stats-text")
                 ])
             ], className="control-card")
@@ -285,7 +343,7 @@ app.layout = dbc.Container([
         # --- MAIN SIMULATOR VIEW (Width 9) ---
         dbc.Col([
             dbc.Card([
-                dcc.Graph(id='live-graph', style={'height': '85vh'}, config={'displayModeBar': False})
+                dcc.Graph(id='live-graph', style={'height': '85vh'}, config={'displayModeBar': False, 'scrollZoom': True})
             ], style={'borderRadius': '15px', 'overflow': 'hidden', 'border': 'none', 'boxShadow': '0 4px 20px rgba(0,0,0,0.3)'})
         ], width=9)
     ])
@@ -305,14 +363,24 @@ def apply_preset(preset):
     return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 @app.callback(
+    [Output('gorkov-object-mode', 'style'), Output('gorkov-mode-label', 'style'),
+     Output('obj2-accordion-item', 'style')],
+    [Input('force-model', 'value'), Input('enable-obj2', 'value')]
+)
+def toggle_gorkov_settings(model, obj2_enabled):
+    gorkov_v = {'display': 'block'} if model == 'gorkov' else {'display': 'none'}
+    obj2_v = {'display': 'block'} if 'enabled' in (obj2_enabled or []) else {'display': 'none'}
+    return gorkov_v, gorkov_v, obj2_v
+
+@app.callback(
     Output('pos-z', 'value', allow_duplicate=True),
     [Input('btn-auto-levitate', 'n_clicks')],
     [State('selected-object', 'value'), State('object-scale', 'value'), State('z-squash', 'value'),
      State('material-preset', 'value'), State('sound-power', 'value'), State('phase-shift', 'value'),
-     State('pos-x', 'value'), State('pos-y', 'value')],
+     State('pos-x', 'value'), State('pos-y', 'value'), State('force-model', 'value'), State('gorkov-object-mode', 'value')],
     prevent_initial_call=True
 )
-def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, phase_deg, x, y):
+def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, phase_deg, x, y, force_model, gorkov_mode):
     if not n_clicks:
         return dash.no_update
     
@@ -329,12 +397,16 @@ def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, pha
         mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
     mesh.apply_scale(scale or 0.04)
     if squash and squash != 1.0:
+        # Volume-preserving squash: if Z scales by s, X and Y must scale by 1/sqrt(s)
+        scaler_xy = 1.0 / np.sqrt(squash)
         v = mesh.vertices.copy()
+        v[:, 0] *= scaler_xy
+        v[:, 1] *= scaler_xy
         v[:, 2] *= squash
         mesh.vertices = v
-    
+
     total_mass = mesh.volume * mat_info['rho']
-    gravity_f_z = -(total_mass * 9806.65)
+    gravity_f_z = -(total_mass * 9806.65) # Total weight in micro-Newtons (g*mm/s^2)
     
     # 3. Optimized Sweep (Coarse Sweep + Refined Search)
     centroids = mesh.triangles_center - mesh.centroid
@@ -346,8 +418,13 @@ def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, pha
     z_coarse = np.linspace(-30, 30, 61)
     
     def get_net_force(z_pos):
-        test_pts = sub_centroids + np.array([x, y, z_pos])
-        f_acoustic = compute_gorkov_force(test_pts, SOURCES, sub_vol, f1, f2, phases)
+        if force_model == 'gorkov' and gorkov_mode == 'single':
+            test_pts = np.array([[x, y, z_pos]], dtype=float)
+            f_acoustic = compute_gorkov_force(test_pts, SOURCES, mesh.volume, f1, f2, phases)
+        else:
+            test_pts = sub_centroids + np.array([x, y, z_pos])
+            f_acoustic = compute_gorkov_force(test_pts, SOURCES, sub_vol, f1, f2, phases)
+        
         total_acoustic_z = np.sum(f_acoustic[:, 2]) * (power_mult ** 2)
         return total_acoustic_z + gravity_f_z
 
@@ -378,48 +455,54 @@ def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, pha
 
 @app.callback(
     [Output('pos-x', 'value'), Output('pos-y', 'value'), Output('pos-z', 'value'),
-     Output('rot-x', 'value'), Output('rot-y', 'value'), Output('rot-z', 'value'),
-     Output('inp-x', 'value'), Output('inp-y', 'value'), Output('inp-z', 'value'),
-     Output('inp-rx', 'value'), Output('inp-ry', 'value'), Output('inp-rz', 'value'),
-     Output('camera-store', 'data')],
-    [Input('pos-x', 'value'), Input('pos-y', 'value'), Input('pos-z', 'value'),
-     Input('rot-x', 'value'), Input('rot-y', 'value'), Input('rot-z', 'value'),
-     Input('inp-x', 'value'), Input('inp-y', 'value'), Input('inp-z', 'value'),
-     Input('inp-rx', 'value'), Input('inp-ry', 'value'), Input('inp-rz', 'value'),
-     Input('live-graph', 'relayoutData')],
-    [State('rotation-mode', 'value'), State('camera-store', 'data')]
+     Output('rot-x', 'value'), Output('rot-y', 'value'), Output('rot-z', 'value')],
+    [Input('slider-pos-x', 'value'), Input('slider-pos-y', 'value'), Input('slider-pos-z', 'value')],
+    [State('pos-x', 'value'), State('pos-y', 'value'), State('pos-z', 'value')]
 )
-def sync_controls(sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, relayout, mode, camera_data):
+def sync_pos_sliders(sx, sy, sz, ix, iy, iz):
     ctx = callback_context
-    if not ctx.triggered:
-        return sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, camera_data
-    
-    tid = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    if tid == 'live-graph' and relayout and 'scene.camera' in relayout:
-        new_cam = relayout['scene.camera']
-        if mode == 'world':
-            return sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, new_cam
-        else:
-            eye = new_cam.get('eye', camera_data['eye'])
-            new_rz = (np.degrees(np.arctan2(eye['y'], eye['x'])) + 45) % 360
-            new_rx = (np.degrees(np.arctan2(eye['z'], np.sqrt(eye['x']**2 + eye['y']**2)))) % 360
-            return sx, sy, sz, round(new_rx), sry, round(new_rz), sx, sy, sz, round(new_rx), sry, round(new_rz), camera_data
-
-    if tid.startswith('pos-') or tid.startswith('rot-'):
-        return sx, sy, sz, srx, sry, srz, sx, sy, sz, srx, sry, srz, camera_data
-    if tid.startswith('inp-'):
-        return (ix or 0), (iy or 0), (iz or 0), (irx or 0), (iry or 0), (irz or 0), \
-               (ix or 0), (iy or 0), (iz or 0), (irx or 0), (iry or 0), (irz or 0), camera_data
-
-    return sx, sy, sz, srx, sry, srz, ix, iy, iz, irx, iry, irz, camera_data
+    if not ctx.triggered: return ix, iy, iz, 0, 0, 0
+    return sx, sy, sz, dash.no_update, dash.no_update, dash.no_update
 
 @app.callback(
-    [Output('sp-val', 'children'), Output('ps-val', 'children'), Output('subdiv-val', 'children'), Output('squash-val', 'children')],
-    [Input('sound-power', 'value'), Input('phase-shift', 'value'), Input('subdiv-level', 'value'), Input('z-squash', 'value')]
+    [Output('pos-x-2', 'value'), Output('pos-y-2', 'value'), Output('pos-z-2', 'value')],
+    [Input('slider-pos-x-2', 'value'), Input('slider-pos-y-2', 'value'), Input('slider-pos-z-2', 'value')]
 )
-def update_slider_labels(sp, ps, sd, sq):
-    return f"{sp}", f"{ps}", f"{sd}", f"{sq:.2f}"
+def sync_pos_sliders_2(sx, sy, sz):
+    return sx, sy, sz
+
+@app.callback(
+    Output('camera-store', 'data', allow_duplicate=True),
+    [Input('live-graph', 'relayoutData')],
+    [State('rotation-mode', 'value'), State('camera-store', 'data')],
+    prevent_initial_call=True
+)
+def sync_camera(relayout, mode, camera_data):
+    if relayout and 'scene.camera' in relayout:
+        return relayout['scene.camera']
+    return dash.no_update
+
+
+@app.callback(
+    Output('camera-store', 'data', allow_duplicate=True),
+    [Input('btn-focus-camera', 'n_clicks')],
+    [State('pos-x', 'value'), State('pos-y', 'value'), State('pos-z', 'value'), State('camera-store', 'data')],
+    prevent_initial_call=True
+)
+def focus_camera(n, x, y, z, current_cam):
+    new_cam = current_cam.copy()
+    # Normalize to scene limits (50) and offset Z downward by 1mm
+    new_cam['center'] = {'x': x/50.0, 'y': y/50.0, 'z': (z - 1.0)/50.0}
+    return new_cam
+
+@app.callback(
+    [Output('sp-val', 'children'), Output('ps-val', 'children'), Output('subdiv-val', 'children'), 
+     Output('subdiv-val-2', 'children')],
+    [Input('sound-power', 'value'), Input('phase-shift', 'value'), Input('subdiv-level', 'value'), 
+     Input('subdiv-level-2', 'value')]
+)
+def update_slider_labels(sp, ps, sd, sd2):
+    return f"{sp}", f"{ps}", f"{sd}", f"{sd2}"
 
 @app.callback(
     [Output('live-graph', 'figure'), Output('stats-target', 'children')],
@@ -428,309 +511,183 @@ def update_slider_labels(sp, ps, sd, sq):
      Input('force-model', 'value'), Input('material-preset', 'value'),
      Input('field-toggles', 'value'), Input('phase-shift', 'value'), Input('sound-power', 'value'),
      Input('selected-object', 'value'), Input('object-scale', 'value'), Input('subdiv-level', 'value'),
-     Input('z-squash', 'value')],
-    [State('live-graph', 'relayoutData'), State('rotation-mode', 'value'), State('camera-store', 'data')]
+     Input('z-squash', 'value'), Input('gorkov-object-mode', 'value'),
+     Input('enable-obj2', 'value'),
+     Input('selected-object-2', 'value'), Input('object-scale-2', 'value'), Input('subdiv-level-2', 'value'),
+     Input('z-squash-2', 'value'), Input('material-preset-2', 'value'),
+     Input('pos-x-2', 'value'), Input('pos-y-2', 'value'), Input('pos-z-2', 'value'),
+     Input('rot-x-2', 'value'), Input('rot-y-2', 'value'), Input('rot-z-2', 'value'),
+     Input('camera-store', 'data')],
+    [State('rotation-mode', 'value')]
 )
-def update_physics(x, y, z, rx, ry, rz, force_model, material_key, field_toggles, phase_shift_deg, sound_power_pct,
-                    stl_path, scale_factor, subdiv_level, z_squash,
-                    relayout, mode, camera_data):
-    # --- Update active material and parameters ---
-    mat_module.ACTIVE_MATERIAL = material_key
+def update_physics(x1, y1, z1, rx1, ry1, rz1, force_model, material_key1, field_toggles, phase_shift_deg, sound_power_pct,
+                    stl_path1, scale_factor1, subdiv_level1, z_squash1, gorkov_mode,
+                    enable_obj2, stl_path2, scale_factor2, subdiv_level2, z_squash2, material_key2,
+                    x2, y2, z2, rx2, ry2, rz2, camera_data, mode):
     
     # Scale base amplitude by power percentage
     power_mult = (sound_power_pct or 100) / 100.0
-    effective_amplitude = AMPLITUDE * power_mult
-
-    # --- Load and transform mesh ---
-    mesh = trimesh.load(stl_path)
-    if isinstance(mesh, trimesh.Scene):
-        meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
-        mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
-    mesh.apply_scale(scale_factor or 0.04)
-    mesh.vertices -= mesh.centroid
-    
-    # --- Apply subdivision for higher integration density ---
-    if subdiv_level and subdiv_level > 0:
-        for _ in range(subdiv_level):
-            v, f = trimesh.remesh.subdivide(mesh.vertices, mesh.faces)
-            mesh = trimesh.Trimesh(vertices=v, faces=f)
-
-    # --- Apply Z-Squash deformation (Oblate Spheroid) ---
-    z_sq = z_squash if z_squash is not None else 1.0
-    if z_sq != 1.0:
-        # Using a transform matrix is the cleanest way in trimesh
-        squash_mat = np.eye(4)
-        squash_mat[2, 2] = z_sq
-        mesh.apply_transform(squash_mat)
-    
-    # Apply Standard Euler Sequential Rotations (X -> Y -> Z)
-    r_x = trimesh.transformations.rotation_matrix(np.radians(rx), [1, 0, 0])
-    r_y = trimesh.transformations.rotation_matrix(np.radians(ry), [0, 1, 0])
-    r_z = trimesh.transformations.rotation_matrix(np.radians(rz), [0, 0, 1])
-    t_mat = trimesh.transformations.translation_matrix([x, y, z])
-    mesh.apply_transform(trimesh.transformations.concatenate_matrices(t_mat, r_z, r_y, r_x))
-    
-    c_pts, n_pts, a_pts = mesh.triangles_center, mesh.face_normals, mesh.area_faces
-
-    # --- Parse toggles ---
-    show_pressure = 'pressure_color' in (field_toggles or [])
-    show_force_map = 'acoustic_force_color' in (field_toggles or [])
-    show_gorkov_map = 'gorkov_color' in (field_toggles or [])
-    show_velocity = 'velocity_arrows' in (field_toggles or [])
-    show_acoustic_force = 'acoustic_arrows' in (field_toggles or [])
-    show_gravity = 'gravity_arrows' in (field_toggles or [])
-    show_net_force = 'net_force_arrows' in (field_toggles or [])
-
-    # --- Compute phase array ---
     phases = np.zeros(len(SOURCES))
     phases[SOURCES[:, 2] > 0] = np.radians(phase_shift_deg)
-
-    # --- Compute acoustic field based on selected model ---
-    stats_lines = []
-    mat_info = get_material(material_key)
-    f1, f2 = get_contrast_factors(material_key)
-
-    if force_model == 'gorkov':
-        # Gorkov evaluates body forces. To map this to surface nodes like Simplified model,
-        # we treat each face as a discrete sub-particle containing an equal fraction of the mass/volume.
-        # NOTE: This is not entirely accurate, but it is a good approximation for now. We also are using volume instead of radius
-        vol_per_face = mesh.volume / max(1, len(a_pts))
-        p_amp, v_speed, v_vectors, gorkov_U, gorkov_force = \
-            compute_gorkov_forces(c_pts, SOURCES, vol_per_face, phases=phases)
-            
-        # Manually scale forces by amp multiplier squared for Gorkov (U ~ P^2)
-        f_acoustic = gorkov_force * (power_mult ** 2)
-        p_amp *= power_mult # p scales linearly
-        model_label = "Gorkov"
-        stats_lines.append(html.Div([html.Span("MODEL: ", style={'color': '#888'}), "Gorkov Potential"]))
-        stats_lines.append(html.Div([html.Span("PHASE: ", style={'color': '#888'}), f"Top offset {phase_shift_deg}°"]))
-        stats_lines.append(html.Div([html.Span("f1: ", style={'color': '#888'}), f"{f1:.4f}",
-                                     html.Span("  f2: ", style={'color': '#888'}), f"{f2:.4f}"]))
-        if gorkov_U is not None:
-            stats_lines.append(html.Div([html.Span("GORKOV U: ", style={'color': '#888'}),
-                                         f"min={np.min(gorkov_U):.2e} max={np.max(gorkov_U):.2e}"]))
-    else:
-        p_amp, v_scalar, f_acoustic = compute_simplified_forces(c_pts, n_pts, a_pts, SOURCES, phases=phases)
-        # Simplified radiation pressure scales with P^2
-        f_acoustic *= (power_mult ** 2)
-        p_amp *= power_mult
-        v_speed = v_scalar * power_mult
-        v_vectors = None
-        gorkov_U = None
-        model_label = "Simplified"
-        stats_lines.append(html.Div([html.Span("MODEL: ", style={'color': '#888'}), "Simplified Radiation Pressure"]))
-
-    # --- Gravity ---
-    total_mass = mesh.volume * mat_info['rho']  # g (in mm/g unit system)
-    f_gravity = np.zeros_like(f_acoustic)
-    # The tranducers were mapped to the Z-axis on load, so gravity should pull down -Z
-    # TODO: Make gravity direction dependent on transducer orientation / Fixed
-    f_gravity[:, 2] = -(total_mass * 9806.65) / len(a_pts)  # gravity in mm/s^2
-
     
-    f_net = f_acoustic + f_gravity
-    net_v = np.sum(f_net, axis=0)
-    
-    # Calculate global sums for debugging
-    total_acoustic_f = np.sum(f_acoustic, axis=0)
-    total_gravity_f = np.sum(f_gravity, axis=0)
-
-    # --- Build Figure ---
     fig = go.Figure()
+    all_stats = []
 
-    # 1. Mesh — colored by pressure, force, gorkov, or plain
-    if show_gorkov_map and gorkov_U is not None:
-        fig.add_trace(go.Mesh3d(
-            x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
-            i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-            intensity=gorkov_U, intensitymode='cell',
-            colorscale='Portland', colorbar=dict(title='Gorkov U', x=1.0, len=0.5, y=0.75),
-            opacity=1.0, flatshading=True,
-            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
-            name='Acoustic Target',
-        ))
-    elif show_force_map:
-        f_mags = np.linalg.norm(f_acoustic, axis=1)
-        fig.add_trace(go.Mesh3d(
-            x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
-            i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-            intensity=f_mags, intensitymode='cell',
-            colorscale='Hot', colorbar=dict(title='Local Force (mag)', x=1.0, len=0.5, y=0.75),
-            opacity=1.0, flatshading=True,
-            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
-            name='Acoustic Target',
-        ))
-    elif show_pressure:
-        fig.add_trace(go.Mesh3d(
-            x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
-            i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-            intensity=p_amp, intensitymode='cell',
-            colorscale='Viridis', colorbar=dict(title='Pressure (Pa)', x=1.0, len=0.5, y=0.75),
-            opacity=1.0, flatshading=True,
-            lighting=dict(ambient=0.45, diffuse=0.8, specular=0.4, roughness=0.2),
-            name='Acoustic Target',
-        ))
-    else:
-        # Use a deeper blue for water droplets
-        mesh_color = '#0077ff' if material_key == 'water_droplet' else '#00e0ff'
-        mesh_opacity = 0.6 if material_key == 'water_droplet' else 0.3
+    def process_object(idx, stl_p, scale, subdiv, squash, mat_k, x, y, z, rx, ry, rz):
+        mesh = trimesh.load(stl_p)
+        if isinstance(mesh, trimesh.Scene):
+            meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
+            mesh = trimesh.util.concatenate(meshes) if meshes else mesh.to_geometry()
+        mesh.apply_scale(scale or 0.04)
+        mesh.vertices -= mesh.centroid
+        
+        if subdiv and subdiv > 0:
+            for _ in range(subdiv):
+                v, f = trimesh.remesh.subdivide(mesh.vertices, mesh.faces)
+                mesh = trimesh.Trimesh(vertices=v, faces=f)
+
+        sq = squash if squash is not None else 1.0
+        if sq != 1.0:
+            scaler_xy = 1.0 / np.sqrt(sq)
+            squash_mat = np.eye(4)
+            squash_mat[0, 0] = scaler_xy
+            squash_mat[1, 1] = scaler_xy
+            squash_mat[2, 2] = sq
+            mesh.apply_transform(squash_mat)
+        
+        r_x = trimesh.transformations.rotation_matrix(np.radians(rx), [1, 0, 0])
+        r_y = trimesh.transformations.rotation_matrix(np.radians(ry), [0, 1, 0])
+        r_z = trimesh.transformations.rotation_matrix(np.radians(rz), [0, 0, 1])
+        t_mat = trimesh.transformations.translation_matrix([x, y, z])
+        mesh.apply_transform(trimesh.transformations.concatenate_matrices(t_mat, r_z, r_y, r_x))
+        
+        c_pts, n_pts, a_pts = mesh.triangles_center, mesh.face_normals, mesh.area_faces
+        mat_info = get_material(mat_k)
+        f1, f2 = get_contrast_factors(mat_k)
+
+        if force_model == 'gorkov':
+            if gorkov_mode == 'single':
+                p_amp_s, v_speed_s, v_vec_s, gorkov_U_s, gorkov_f_s = \
+                    compute_gorkov_forces(np.array([[x, y, z]], dtype=float), SOURCES, mesh.volume, phases=phases)
+                f_acoustic = np.tile(gorkov_f_s, (len(a_pts), 1)) / len(a_pts)
+                p_amp = np.full(len(a_pts), p_amp_s[0])
+                v_speed = np.full(len(a_pts), v_speed_s[0])
+                v_vectors = np.tile(v_vec_s, (len(a_pts), 1))
+                gorkov_U = np.full(len(a_pts), gorkov_U_s[0])
+            else:
+                vol_per_face = mesh.volume / max(1, len(a_pts))
+                p_amp, v_speed, v_vectors, gorkov_U, gorkov_force = \
+                    compute_gorkov_forces(c_pts, SOURCES, vol_per_face, phases=phases)
+                f_acoustic = gorkov_force
+            f_acoustic *= (power_mult ** 2)
+            p_amp *= power_mult
+        else:
+            p_amp, v_scalar, f_acoustic = compute_simplified_forces(c_pts, n_pts, a_pts, SOURCES, phases=phases)
+            f_acoustic *= (power_mult ** 2)
+            p_amp *= power_mult
+            v_speed = v_scalar * power_mult
+            v_vectors = None
+            gorkov_U = None
+
+        total_mass = mesh.volume * mat_info['rho']
+        f_gravity = np.zeros_like(f_acoustic)
+        f_gravity[:, 2] = -(total_mass * 9806.65) / len(a_pts)
+        f_net = f_acoustic + f_gravity
+        net_v = np.sum(f_net, axis=0)
+
+        # Rendering
+        toggles = field_toggles or []
+        if 'gorkov_color' in toggles and gorkov_U is not None:
+            intensity, scale_name, colorscale = gorkov_U, 'Gorkov U', 'Portland'
+        elif 'acoustic_force_color' in toggles:
+            intensity, scale_name, colorscale = np.linalg.norm(f_acoustic, axis=1), 'Force Mag', 'Hot'
+        elif 'pressure_color' in toggles:
+            intensity, scale_name, colorscale = p_amp, 'Pressure (Pa)', 'Viridis'
+        else:
+            intensity, scale_name, colorscale = None, None, None
+
+        mesh_color = '#0077ff' if mat_k == 'water_droplet' else ('#00e0ff' if idx==1 else '#ffcc00')
+        mesh_opacity = 0.6 if mat_k == 'water_droplet' else 0.3
         
         fig.add_trace(go.Mesh3d(
             x=mesh.vertices[:, 0], y=mesh.vertices[:, 1], z=mesh.vertices[:, 2],
             i=mesh.faces[:, 0], j=mesh.faces[:, 1], k=mesh.faces[:, 2],
-            color=mesh_color, opacity=mesh_opacity, flatshading=True,
+            intensity=intensity, intensitymode='cell' if intensity is not None else None,
+            colorscale=colorscale, colorbar=dict(title=scale_name, x=1.00 + (idx-1)*0.08, len=0.4, y=0.7) if scale_name else None,
+            color=mesh_color if intensity is None else None,
+            opacity=mesh_opacity, flatshading=True,
             lighting=dict(ambient=0.45, diffuse=0.8, specular=1.0, roughness=0.1),
-            name='Acoustic Target',
+            name=f'Object {idx}'
         ))
 
-    # Add white outline (wireframe) around each polygon to make it clearly visible
-    if hasattr(mesh, 'edges_unique'):
-        edge_vertices = mesh.vertices[mesh.edges_unique]
-        lines_x = np.insert(edge_vertices[:, :, 0], 2, np.nan, axis=1).flatten()
-        lines_y = np.insert(edge_vertices[:, :, 1], 2, np.nan, axis=1).flatten()
-        lines_z = np.insert(edge_vertices[:, :, 2], 2, np.nan, axis=1).flatten()
-        fig.add_trace(go.Scatter3d(
-            x=lines_x, y=lines_y, z=lines_z,
-            mode='lines', line=dict(color='white', width=2),
-            name='Polygon Lines', showlegend=False,
-            hoverinfo='none'
-        ))
+        # Add white outline (wireframe) around each polygon to make it clearly visible
+        if hasattr(mesh, 'edges_unique'):
+            edge_vertices = mesh.vertices[mesh.edges_unique]
+            lines_x = np.insert(edge_vertices[:, :, 0], 2, np.nan, axis=1).flatten()
+            lines_y = np.insert(edge_vertices[:, :, 1], 2, np.nan, axis=1).flatten()
+            lines_z = np.insert(edge_vertices[:, :, 2], 2, np.nan, axis=1).flatten()
+            fig.add_trace(go.Scatter3d(
+                x=lines_x, y=lines_y, z=lines_z,
+                mode='lines', line=dict(color='white' if idx==1 else '#ffffaa', width=2),
+                name=f'Obj{idx} Wireframe', showlegend=False,
+                hoverinfo='none'
+            ))
 
-    # --- Arrow drawing helper using 3D cones ---
-    def draw_arrows(origins, vecs, color, name, scale=6.0, ref_mag=None):
+        if 'acoustic_arrows' in toggles:
+            draw_arrows(fig, c_pts, f_acoustic, "#ff00ff" if idx==1 else "#ff55ff", f"Obj{idx} Acoustic", scale=2.0)
+        if 'gravity_arrows' in toggles:
+            draw_arrows(fig, np.array([[x, y, z]]), np.array([[0,0,-total_mass*9806.65]]), "#ff0000", f"Obj{idx} Gravity", scale=5.0, ref_mag=total_mass*9806.65)
+        if 'net_force_arrows' in toggles:
+            draw_arrows(fig, np.array([[x, y, z]]), np.array([net_v]), "#ff8800", f"Obj{idx} Net", scale=5.0, ref_mag=total_mass*9806.65)
+        
+        # Stats
+        obj_stats = [
+            html.Div([html.B(f"OBJECT {idx} ({mat_info['name']})", style={'color': mesh_color})]),
+            html.Div([f"Vol: {mesh.volume:.2f} mm³ | Mass: {total_mass*1000:.2f} mg"]),
+            html.Div([f"Net Force: {np.linalg.norm(net_v):.2f} μN | Z: {net_v[2]:+.2f} μN"]),
+            html.Hr(style={'margin': '5px 0', 'opacity': '0.2'})
+        ]
+        return obj_stats
+
+    def draw_arrows(f, origins, vecs, color, name, scale=6.0, ref_mag=None):
         mags = np.linalg.norm(vecs, axis=1)
-        if ref_mag is None:
-            # Native auto-scaling: find the average non-zero magnitude
-            avg = np.mean(mags[mags > 0]) if np.any(mags > 0) else 1.0
-        else:
-            avg = ref_mag
-            
-        # Subsample for performance
-        step = max(1, len(origins) // 300)
+        avg = ref_mag if ref_mag else (np.mean(mags[mags > 0]) if np.any(mags > 0) else 1.0)
+        step = max(1, len(origins) // 150)
         idx = np.arange(0, len(origins), step)
+        vis_mags = scale * (np.log1p(mags[idx] / avg) if ref_mag else mags[idx]*(scale/avg))
         
-        ox, oy, oz = origins[idx, 0], origins[idx, 1], origins[idx, 2]
         u, v, w = vecs[idx, 0], vecs[idx, 1], vecs[idx, 2]
-        m_sub = mags[idx]
-        # Linearly scale relative to the reference magnitude
-        vis_scale = scale / avg
-        
-        # Logarithmic magnitude scaling for wide dynamic range
-        # Result: Arrow shrinks clearly when approaching zero, but doesn't grow infinitely large.
-        if ref_mag is not None:
-            # Normalized log scale: y = scale * log1p(mag / ref)
-            log_mags = np.log1p(mags[idx] / ref_mag)
-            vis_mags = scale * log_mags
-        else:
-            vis_mags = mags[idx] * vis_scale
-        
-        max_multiplier = 15.0
-        
-        with np.errstate(divide='ignore', invalid='ignore'):
-            cap_factors = np.ones_like(vis_mags)
-            mask = vis_mags > (scale * max_multiplier)
-            if np.any(mask):
-                cap_factors[mask] = (scale * max_multiplier) / vis_mags[mask]
-                
-            # Compute unit vectors and scale by vis_mags
-            norm_u = np.zeros_like(u)
-            norm_v = np.zeros_like(v)
-            norm_w = np.zeros_like(w)
-            
-            non_zero = mags[idx] > 1e-12
-            norm_u[non_zero] = u[non_zero] / mags[idx][non_zero]
-            norm_v[non_zero] = v[non_zero] / mags[idx][non_zero]
-            norm_w[non_zero] = w[non_zero] / mags[idx][non_zero]
-            
-            u = norm_u * vis_mags * cap_factors
-            v = norm_v * vis_mags * cap_factors
-            w = norm_w * vis_mags * cap_factors
-            
-            # Additional visual logic: if the vector is nearly zero, hide it
-            if np.all(vis_mags < 1e-9):
-                return
-            
-        dynamic_sizeref = scale * 1.5
-            
-        fig.add_trace(go.Cone(
-            x=ox, y=oy, z=oz,
-            u=u, v=v, w=w,
-            sizemode="absolute",
-            sizeref=dynamic_sizeref, 
-            anchor="tip",          
-            colorscale=[[0, color], [1, color]], 
-            showscale=False,
-            name=name,
-            showlegend=True
+        non_zero = mags[idx] > 1e-12
+        u[non_zero] *= vis_mags[non_zero] / mags[idx][non_zero]
+        v[non_zero] *= vis_mags[non_zero] / mags[idx][non_zero]
+        w[non_zero] *= vis_mags[non_zero] / mags[idx][non_zero]
+
+        f.add_trace(go.Cone(
+            x=origins[idx, 0], y=origins[idx, 1], z=origins[idx, 2],
+            u=u, v=v, w=w, sizemode="absolute", sizeref=scale*1.5, anchor="tip",
+            colorscale=[[0, color], [1, color]], showscale=False, name=name
         ))
 
-    # 2. Velocity arrows
-    if show_velocity:
-        if v_vectors is not None:
-            v_real = np.real(v_vectors)
-            draw_arrows(c_pts, v_real, "#00e0ff", "Velocity", scale=4.0)
-        else:
-            # For simplified mode, velocity is scalar along -normal 
-            v_arrow = v_speed[:, np.newaxis] * (-n_pts)
-            draw_arrows(c_pts, v_arrow, "#00e0ff", "Velocity (scalar)", scale=4.0)
+    # Process Object 1
+    stats1 = process_object(1, stl_path1, scale_factor1, subdiv_level1, z_squash1, material_key1, x1, y1, z1, rx1, ry1, rz1)
+    all_stats.extend(stats1)
 
-    # Disable dynamic auto-scaling. A dynamic scale causes arrows to "blow up" to
-    # the maximum screen size even when they are physically near zero.
-    # By using a fixed reference magnitude, 1 unit of visual arrow length 
-    # perfectly equals a fixed physical unit of force (g mm / s^2) across the board.
-    fixed_physics_scale = 10000.0
+    # Process Object 2 if enabled
+    if 'enabled' in (enable_obj2 or []):
+        stats2 = process_object(2, stl_path2, scale_factor2, subdiv_level2, z_squash2, material_key2, x2, y2, z2, rx2, ry2, rz2)
+        all_stats.extend(stats2)
 
-    # 3. Acoustic force arrows (Local Surface Squeezing Forces)
-    if show_acoustic_force:
-        draw_arrows(c_pts, f_acoustic, "#ff00ff", f"Acoustic Force ({model_label})", scale=2.0)
-
-    # Calculate absolute global gravity for rendering scale reference
-    global_gravity_mag = total_mass * 9806.65
-    
-    # 4. Gravity arrow (Single Global Free-Body Force)
-    if show_gravity:
-        global_g_vec = np.array([[0.0, 0.0, -global_gravity_mag]])
-        draw_arrows(np.array([[x, y, z]]), global_g_vec, "#ff0000", "Global Gravity", scale=5.0, ref_mag=global_gravity_mag)
-
-    # 5. Net force arrow (Single Global Free-Body Force)
-    if show_net_force:
-        draw_arrows(np.array([[x, y, z]]), np.array([net_v]), "#ff8800", "Global Net Force", scale=5.0, ref_mag=global_gravity_mag)
-
-    # 6. Transducer positions
+    # Transducers
     fig.add_trace(go.Scatter3d(x=SOURCES[:, 0], y=SOURCES[:, 1], z=SOURCES[:, 2],
-                               mode='markers',
-                               marker={'size': 4, 'color': 'white', 'opacity': 0.7},
-                               name='Transducers'))
+                               mode='markers', marker={'size': 3, 'color': 'white', 'opacity': 0.4}, name='Transducers'))
 
-    limit = 50
     fig.update_layout(
         template='plotly_dark',
-        title=f"Simulation: {os.path.basename(stl_path)} | Scale: {scale_factor:.3f} | Z-Squash: {z_sq:.2f}",
-        scene={'xaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
-               'yaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
-               'zaxis': {'range': [-limit, limit], 'gridcolor': '#333'},
-               'aspectmode': 'cube'},
-        margin={'l': 0, 'r': 0, 't': 0, 'b': 0},
-        uirevision='stable',
-        scene_camera=camera_data,
-        legend=dict(yanchor="top", y=0.95, xanchor="left", x=0.05, bgcolor="rgba(0,0,0,0.5)")
+        scene={'xaxis': {'range': [-50, 50]}, 'yaxis': {'range': [-50, 50]}, 'zaxis': {'range': [-50, 50]}, 'aspectmode': 'cube'},
+        margin={'l': 0, 'r': 0, 't': 0, 'b': 0}, uirevision='stable', scene_camera=camera_data
     )
     
-    # --- Stats panel ---
-    stats_lines.append(html.Div([html.Span("MATERIAL: ", style={'color': '#888'}), mat_info['name']]))
-    stats_lines.append(html.Div([html.Span("VOLUME: ", style={'color': '#888'}), f"{mesh.volume:.4f} mm³"]))
-    stats_lines.append(html.Div([html.Span("MASS: ", style={'color': '#888'}), f"{total_mass:.4e} g ({total_mass*1000:.2f} mg)"]))
-    stats_lines.append(html.Hr(style={'margin': '5px 0'}))
-    stats_lines.append(html.Div([html.Span("NET FORCE: ", style={'color': '#888'}), f"{np.linalg.norm(net_v):.4e}"]))
-    stats_lines.append(html.Div([html.Span("  Acoustic (Z): ", style={'color': '#888'}), f"{total_acoustic_f[2]:+.2e}"]))
-    stats_lines.append(html.Div([html.Span("  Gravity  (Z): ", style={'color': '#888'}), f"{total_gravity_f[2]:+.2e}"]))
-    stats_lines.append(html.Div([html.Span("VECTOR: ", style={'color': '#888'}),
-                                  f"[{net_v[0]:.2e}, {net_v[1]:.2e}, {net_v[2]:.2e}]"]))
-    stats_lines.append(html.Div([html.Span("MAX PRESSURE: ", style={'color': '#888'}), f"{np.max(p_amp):.0f} Pa"]))
-    stats_lines.append(html.Div([html.Span("INTEGRATION PTS: ", style={'color': '#888'}), f"{len(a_pts)}"]))
-    stats_lines.append(html.Div([html.Span("MAX VELOCITY: ", style={'color': '#888'}), f"{np.max(v_speed):.2e} mm/s"]))
-    
-    return fig, [html.Div(stats_lines)]
+    return fig, all_stats
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
