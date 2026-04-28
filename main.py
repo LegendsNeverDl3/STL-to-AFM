@@ -183,17 +183,19 @@ default_stl = os.path.join('3D_Files', 'Sphere.stl') if 'Sphere.stl' in stl_file
 
 app.layout = dbc.Container([
     dcc.Store(id='camera-store', data={'eye': {'x': 1.25, 'y': 1.25, 'z': 1.25}, 'center': {'x': 0, 'y': 0, 'z': 0}}),
-    dcc.Store(id='physics-state', data={'v1': [0,0,0], 'v2': [0,0,0], 'running': False, 'last_update': 0}),
-    dcc.Interval(id='physics-interval', interval=100, n_intervals=0, disabled=True),
+    dcc.Store(id='physics-state', data={'v1': [0, 0, 0], 'v2': [0, 0, 0], 'running': False, 'last_update': 0}),
+    dcc.Store(id='trajectory-store', data=[]),
+    dcc.Store(id='playback-frame', data=0),
+    dcc.Interval(id='playback-interval', interval=500, disabled=True),
     
     dbc.Row([
         dbc.Col(html.H1("Acoustic Levitation Simulator", className="text-center my-4", style={'color': '#00e0ff', 'fontWeight': '200', 'letterSpacing': '4px'}), width=7),
         dbc.Col([
             dbc.ButtonGroup([
-                dbc.Button("▶ PLAY", id='btn-play', color="success", className="mx-1", style={'borderRadius': '10px', 'fontWeight': 'bold'}),
-                dbc.Button("⏸ PAUSE", id='btn-pause', color="warning", className="mx-1", style={'borderRadius': '10px', 'fontWeight': 'bold'}),
+                dbc.Button("SIMULATE & PLAY", id='btn-play', color="success", className="mx-1", style={'borderRadius': '10px', 'fontWeight': 'bold'}),
                 dbc.Button("↺ RESET", id='btn-reset', color="danger", className="mx-1", style={'borderRadius': '10px', 'fontWeight': 'bold'}),
             ], className="w-100"),
+            html.Div(id='sim-status', children="Ready", className="text-center mt-2", style={'color': '#00e0ff', 'fontSize': '0.8rem'}),
         ], width=3, className="d-flex align-items-center"),
         dbc.Col([
             html.Label("Presets", className="control-label"),
@@ -353,7 +355,7 @@ app.layout = dbc.Container([
                                 dbc.Col(dbc.Input(id='rot-y-2', type='number', value=0, size="sm", className="dark-input"), width=4),
                                 dbc.Col(dbc.Input(id='rot-z-2', type='number', value=0, size="sm", className="dark-input"), width=4),
                             ], className="mb-2"),
-                        ], title="Object 2 (Secondary)", id='obj2-accordion-item', style={'display': 'none'}),
+                        ], title="Object 2 (Secondary)", id='obj2-accordion-item', style={'display': 'block'}),
 
                         # Category 4: Physics Visualization
                         dbc.AccordionItem([
@@ -473,131 +475,97 @@ def find_equilibrium(n_clicks, stl_path, scale, squash, material_key, power, pha
     return new_z1, cur_z2 + delta_z
 
 @app.callback(
-    [Output('physics-interval', 'disabled'), Output('physics-state', 'data', allow_duplicate=True)],
-    [Input('btn-play', 'n_clicks'), Input('btn-pause', 'n_clicks'), Input('btn-reset', 'n_clicks')],
-    [State('physics-state', 'data')],
-    prevent_initial_call=True
-)
-def control_physics(n_play, n_pause, n_reset, state):
-    ctx = callback_context
-    if not ctx.triggered: raise PreventUpdate
-    tid = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    new_state = state.copy()
-    if tid == 'btn-play':
-        new_state['running'] = True
-        return False, new_state
-    elif tid == 'btn-pause':
-        new_state['running'] = False
-        return True, new_state
-    elif tid == 'btn-reset':
-        new_state['running'] = False
-        new_state['v1'] = [0,0,0]
-        new_state['v2'] = [0,0,0]
-        return True, new_state
-    return dash.no_update, dash.no_update
-
-@app.callback(
-    [Output('slider-pos-x', 'value'), Output('slider-pos-y', 'value'), Output('slider-pos-z', 'value'),
-     Output('slider-pos-x-2', 'value'), Output('slider-pos-y-2', 'value'), Output('slider-pos-z-2', 'value'),
-     Output('physics-state', 'data')],
-    [Input('physics-interval', 'n_intervals'), Input('btn-reset', 'n_clicks')],
-    [State('physics-state', 'data'), State('physics-interval', 'disabled'),
-     State('slider-pos-x', 'value'), State('slider-pos-y', 'value'), State('slider-pos-z', 'value'),
-     State('slider-pos-x-2', 'value'), State('slider-pos-y-2', 'value'), State('slider-pos-z-2', 'value'),
-     State('selected-object', 'value'), State('object-scale', 'value'), State('material-preset', 'value'),
+    [Output('trajectory-store', 'data'),
+     Output('playback-frame', 'data', allow_duplicate=True),
+     Output('playback-interval', 'disabled'),
+     Output('sim-status', 'children')],
+    [Input('btn-play', 'n_clicks'), Input('btn-reset', 'n_clicks')],
+    [State('pos-x', 'value'), State('pos-y', 'value'), State('pos-z', 'value'),
+     State('pos-x-2', 'value'), State('pos-y-2', 'value'), State('pos-z-2', 'value'),
      State('selected-object-2', 'value'), State('object-scale-2', 'value'), State('material-preset-2', 'value'),
-     State('enable-obj2', 'value'), State('force-model', 'value'), State('gorkov-object-mode', 'value'),
-     State('sim-dt', 'value'), State('sim-damping', 'value'),
-     State('phase-shift', 'value'), State('sound-power', 'value')],
+     State('sim-dt', 'value'), State('sim-damping', 'value'), State('sound-power', 'value'), State('phase-shift', 'value')],
     prevent_initial_call=True
 )
-def run_physics_step(n, n_reset, state, disabled, x1, y1, z1, x2, y2, z2, stl1, sc1, mat1, stl2, sc2, mat2, 
-                     enable2, model, g_mode, dt, damping, phase_deg, power_pct):
+def generate_trajectory(n_play, n_reset, x1, y1, z1, x2, y2, z2, stl2, sc2, mat2, dt, damping, power, phase):
     ctx = callback_context
     if not ctx.triggered: raise PreventUpdate
     tid = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if tid == 'btn-reset':
-        return 0, 0, 0, 5, 0, 0, {'v1': [0,0,0], 'v2': [0,0,0], 'running': False}
-
-    if not state.get('running') or disabled:
-        raise PreventUpdate
-
-    new_state = state.copy()
-    p_mult = (power_pct or 100) / 100.0
+        return [], 0, True, "Ready"
+    
+    # 1. Prepare parameters
+    props = get_cached_properties(stl2, sc2, mat2)
+    p_mult = (power or 100) / 100.0
     phases = np.zeros(len(SOURCES))
-    phases[SOURCES[:, 2] > 0] = np.radians(phase_deg)
+    phases[SOURCES[:, 2] > 0] = np.radians(phase)
     
-    def get_force(stl, scale, mat, pos):
-        props = get_cached_properties(stl, scale, mat)
-        
-        # Assume point force for speed in dynamics
-        pts = np.array([pos], dtype=float)
-        f_acoustic = compute_gorkov_force(pts, SOURCES, props['vol'], props['f1'], props['f2'], phases)[0] * (p_mult ** 2)
-        f_gravity = np.array([0, 0, -(props['mass'] * 9806.65)])
-        
-        return f_acoustic + f_gravity, props['mass']
-
-    # Update Object 2
-    pos1 = np.array([x1, y1, z1])
-    pos2 = np.array([x2, y2, z2])
+    # 2. Pre-compute trajectory (max 100 frames at ~2fps playback = ~50 seconds of animation)
+    path = []
+    curr_x, curr_v_x = x2, 0.0
+    sub_dt = 0.05  # Larger steps since playback is slower
     
-    if 'enabled' in (enable2 or []):
-        f2, m2 = get_force(stl2, sc2, mat2, [x2, y2, z2])
+    # Minimum drift force toward target (ensures movement even in weak-field regions)
+    drift_force = 2.0  # μN constant pull toward target
+    
+    for i in range(250):
+        pts = np.array([[curr_x, y2, z2]], dtype=float)
+        f_acoustic = compute_gorkov_force(pts, SOURCES, props['vol'], props['f1'], props['f2'], phases)[0]
+        f_x = f_acoustic[0] * (p_mult ** 2)
         
-        # BARRIER BYPASS: If acoustic force points AWAY from x1, ignore it
-        # This allows the trap to 'pull' the object in without the nodes 'pushing' it back
-        direction_to_center = np.sign(x1 - x2)
-        if np.sign(f2[0]) != direction_to_center:
-            f2[0] = 0.0
-            
-        v2 = np.array(new_state['v2']) + (f2 / m2) * dt
+        # Log first frame for diagnostics
+        if i == 0:
+            print(f"[TRAJECTORY] Start x={curr_x:.3f}, raw f_x={f_x:.6f}, f_full={f_acoustic}")
         
-        # Lock to X-AXIS ONLY (No Y or Z movement)
-        v2[1] = 0
-        v2[2] = 0
+        # Barrier Bypass: zero out forces pushing AWAY from target
+        direction = np.sign(x1 - curr_x)  # -1 if target is left, +1 if right
+        if direction != 0 and np.sign(f_x) != direction:
+            f_x = 0.0
         
-        # Apply intense damping (air drag)
-        v2 *= (1.0 - damping)
+        # Add constant drift toward target
+        f_x += drift_force * direction
         
-        # Velocity Limiter
-        v_limit = 50.0 # tight limit for smooth visuals
-        v_mag = np.abs(v2[0])
-        if v_mag > v_limit:
-            v2[0] = (v2[0] / v_mag) * v_limit
-            
-        pos2 = np.array([x2, y2, z2])
-        pos2[0] += v2[0] * dt # Only update X
-        new_state['v2'] = v2.tolist()
+        curr_v_x += (f_x / props['mass']) * sub_dt
+        curr_v_x *= (1.0 - damping)
+        curr_x += curr_v_x * sub_dt
         
-        # Stop simulation when XY alignment is reached (they are in the same vertical column)
-        xy_dist = np.linalg.norm((pos1 - pos2)[:2])
-        
-        if xy_dist < 0.2: # Stops when within 0.2mm of the same X/Y
-            # STOP SIMULATION
-            new_state['running'] = False
-            return dash.no_update, dash.no_update, dash.no_update, pos2[0], pos2[1], pos2[2], new_state
+        path.append(float(curr_x))
+        if np.abs(curr_x - x1) < 0.2:
+            break
+    # Return trajectory, reset frame counter to 0, ENABLE the interval
+    if path:
+        return path, 0, False, f"Playing {len(path)} frames (x: {path[0]:.2f} → {path[-1]:.2f})"
+    return path, 0, True, "No movement computed"
 
-    return dash.no_update, dash.no_update, dash.no_update, pos2[0], pos2[1], pos2[2], new_state
-
+# --- Playback tick: reads one frame per interval tick ---
 @app.callback(
-    [Output('pos-x', 'value'), Output('pos-y', 'value'), Output('pos-z', 'value'),
-     Output('rot-x', 'value'), Output('rot-y', 'value'), Output('rot-z', 'value')],
-    [Input('slider-pos-x', 'value'), Input('slider-pos-y', 'value'), Input('slider-pos-z', 'value')],
-    [State('pos-x', 'value'), State('pos-y', 'value'), State('pos-z', 'value')]
+    [Output('pos-x-2', 'value', allow_duplicate=True),
+     Output('playback-frame', 'data'),
+     Output('playback-interval', 'disabled', allow_duplicate=True),
+     Output('sim-status', 'children', allow_duplicate=True)],
+    [Input('playback-interval', 'n_intervals')],
+    [State('trajectory-store', 'data'), State('playback-frame', 'data')],
+    prevent_initial_call=True
 )
-def sync_pos_sliders(sx, sy, sz, ix, iy, iz):
-    ctx = callback_context
-    if not ctx.triggered: return ix, iy, iz, 0, 0, 0
-    return sx, sy, sz, dash.no_update, dash.no_update, dash.no_update
+def playback_tick(n_intervals, trajectory, frame):
+    if not trajectory or frame is None:
+        raise PreventUpdate
+    
+    if frame >= len(trajectory):
+        # Done playing - disable interval
+        return dash.no_update, frame, True, "Playback complete"
+    
+    next_x = trajectory[frame]
+    return next_x, frame + 1, dash.no_update, f"Frame {frame+1}/{len(trajectory)} | x={next_x:.3f}"
 
+# --- Slider sync for Object 2 ---
 @app.callback(
     [Output('pos-x-2', 'value'), Output('pos-y-2', 'value'), Output('pos-z-2', 'value')],
     [Input('slider-pos-x-2', 'value'), Input('slider-pos-y-2', 'value'), Input('slider-pos-z-2', 'value')]
 )
 def sync_pos_sliders_2(sx, sy, sz):
     return sx, sy, sz
+
 
 @app.callback(
     Output('camera-store', 'data', allow_duplicate=True),

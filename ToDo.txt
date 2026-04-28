@@ -10,8 +10,9 @@
         Note that dropelet when combined can exceed wavelength, also if you harden a liquid what happens
         Also map how water droplets combine with weird movement(will need time based component)
 
-
-
+Gorkov -> what is delta between rms and ?
+do a google scholar run on evidence of proving acoustic simulations
+Possible route -> using COMSOL????
 
 
 
