@@ -13,8 +13,8 @@
 Gorkov -> what is delta between rms and ?
 do a google scholar run on evidence of proving acoustic simulations
 Possible route -> using COMSOL????
-
-
+Do multislice route and can use a slider while keeping x and Y constant-> COMSOL uses this
+Do CV + tomography??? Research schileren and lens stuff for mappping 2D and 3D OBjects
 
 
 
